@@ -49,8 +49,7 @@ const dateFromKey = (k) => { const [y, m, d] = k.split("-").map(Number); return 
 const todayKey = () => localDateKey();
 
 function loadState() { try { const raw = localStorage.getItem(LS_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; } }
-function saveState(state) { try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch {}
-}
+function saveState(state) { try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch {} }
 function usePersistentState(defaults) {
   const [state, setState] = useState(() => loadState() ?? defaults);
   useEffect(() => { saveState(state); }, [state]);
@@ -67,6 +66,15 @@ function speak(text, lang = "en-US") {
 }
 
 function classNames(...a) { return a.filter(Boolean).join(" "); }
+
+// Reusable UI classes for readable forms (light & dark)
+const FIELD = "w-full rounded-lg px-3 py-2 outline-none border transition " +
+  "bg-white text-slate-900 placeholder-slate-500 border-slate-200 " +
+  "focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 " +
+  "dark:bg-slate-900/70 dark:text-slate-100 dark:placeholder-slate-400 dark:border-white/10";
+
+const LABEL = "block text-sm mb-1 text-slate-700 dark:text-slate-200";
+const HELP  = "text-xs text-slate-600 dark:text-slate-300";
 
 function parseCSV(text) {
   const t = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -105,12 +113,12 @@ const initCardProgress = (deck) => Object.fromEntries(
   deck.map((c) => [c.id, {
     ef: 2.5,
     interval: 0,
-    due: todayKey(),              // will be respected only when introduced === true
+    due: todayKey(),
     correct: 0,
     wrong: 0,
     reps: 0,
-    introduced: false,            // NEW: not in rotation until introduced
-    introducedOn: null,           // NEW: which day it entered the queue
+    introduced: false,
+    introducedOn: null,
   }])
 );
 
@@ -131,7 +139,7 @@ function scheduleNext(progress, quality, intervals) {
     interval = Math.max(interval, Number(intervals?.easy ?? 3));
     reps = 2;
   } else { // later → grow multiplicatively
-    const qMul = quality >= 5 ? 1.25 : 1.0; // reward perfect recall
+    const qMul = quality >= 5 ? 1.25 : 1.0;
     interval = Math.max(1, Math.round(interval * ef * qMul));
     reps += 1;
   }
@@ -156,10 +164,10 @@ export default function App() {
     calendar: {},
     quizHistory: [],
     intervals: { easy: 3, good: 2, hard: 1 },
-    dailyNew: 10, // NEW: introduce up to N new words each day
+    dailyNew: 10,
   });
 
-  // Patch older saves lacking new fields
+  // Patch older saves
   useEffect(() => {
     setStore((s) => {
       const patched = { ...s };
@@ -198,11 +206,9 @@ export default function App() {
     if (store.theme === "dark") root.classList.add("dark"); else root.classList.remove("dark");
   }, [store.theme]);
 
-  // Daily introduction of new words (runs once per day or when settings/deck change)
+  // Daily intro of new words
   useEffect(() => {
     const today = todayKey();
-
-    // how many were introduced today?
     const introducedToday = Object.values(store.cards || {}).filter(c => c.introducedOn === today).length;
     const need = Math.max(0, (store.dailyNew ?? 0) - introducedToday);
 
@@ -233,10 +239,10 @@ export default function App() {
   function addXP(points) { const day = todayKey(); setStore((s) => ({ ...s, xp: s.xp + points, calendar: { ...s.calendar, [day]: (s.calendar[day] ?? 0) + points } })); }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-950 via-slate-900 to-emerald-900 dark:from-slate-950 dark:via-zinc-950 dark:to-slate-900 text-slate-100">
+    <div className="min-h-[100dvh] bg-gradient-to-br from-indigo-950 via-slate-900 to-emerald-900 dark:from-slate-950 dark:via-zinc-950 dark:to-slate-900 text-slate-100">
       <Decor />
       <TopBar store={store} setStore={setStore} goalPct={goalPct} />
-      <main className="max-w-6xl mx-auto px-4 pb-24">
+      <main className="max-w-6xl mx-auto px-4 pb-[calc(76px+env(safe-area-inset-bottom))] md:pb-24">
         <Nav tab={tab} setTab={setTab} />
         <AnimatePresence mode="wait">
           {tab === "home" && (
@@ -279,6 +285,7 @@ export default function App() {
           )}
         </AnimatePresence>
       </main>
+      <BottomTabBar tab={tab} setTab={setTab} />
       <Footer />
     </div>
   );
@@ -345,7 +352,7 @@ function Nav({ tab, setTab }) {
     { id: "settings", label: "Settings", icon: Sparkles },
   ];
   return (
-    <nav className="my-6 grid grid-cols-2 sm:grid-cols-7 gap-2">
+    <nav className="my-6 hidden md:grid grid-cols-2 md:grid-cols-7 gap-2">
       {items.map((it) => (
         <button
           key={it.id}
@@ -361,6 +368,41 @@ function Nav({ tab, setTab }) {
           </div>
         </button>
       ))}
+    </nav>
+  );
+}
+
+function BottomTabBar({ tab, setTab }) {
+  const items = [
+    { id: "home", label: "Home", icon: Home },
+    { id: "flashcards", label: "Cards", icon: BookOpen },
+    { id: "quiz", label: "Quiz", icon: Brain },
+    { id: "listen", label: "Listen", icon: Headphones },
+    { id: "settings", label: "Settings", icon: Sparkles },
+  ];
+  return (
+    <nav
+      className="md:hidden fixed bottom-0 left-0 right-0 z-50 border-t border-white/10 bg-black/70 backdrop-blur supports-[backdrop-filter]:bg-black/40"
+      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+    >
+      <div className="max-w-6xl mx-auto grid grid-cols-5">
+        {items.map((it) => {
+          const Active = tab === it.id;
+          return (
+            <button
+              key={it.id}
+              onClick={() => setTab(it.id)}
+              className={classNames(
+                "flex flex-col items-center justify-center py-2 min-h-16 gap-1",
+                Active ? "text-emerald-400" : "text-slate-200"
+              )}
+            >
+              <it.icon className="size-5" />
+              <span className="text-[11px] leading-none">{it.label}</span>
+            </button>
+          );
+        })}
+      </div>
     </nav>
   );
 }
@@ -423,7 +465,7 @@ function Stats({ store, goalPct }) {
         </div>
       </Card>
       <Card>
-        <div className="h-28 w-full">
+        <div className="h-24 sm:h-28 w-full">
           <div className="text-sm text-slate-400 mb-1 flex items-center gap-2"><CalendarCheck2 className="size-4" /> Last 7 days</div>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={last7} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -439,7 +481,16 @@ function Stats({ store, goalPct }) {
   );
 }
 
-function Card({ children }) { return (<div className="rounded-3xl border border-white/10 bg-white/5 p-4">{children}</div>); }
+function Card({ children, strong = false }) {
+  return (
+    <div className={classNames(
+      "rounded-3xl border p-4",
+      strong ? "bg-white/10 border-white/10" : "bg-white/5 border-white/10"
+    )}>
+      {children}
+    </div>
+  );
+}
 
 function QuickStart({ setTab }) {
   return (
@@ -466,7 +517,6 @@ function QSItem({ icon: Icon, title, desc, onClick }) {
 }
 
 function Flashcards({ store, setStore, onXP }) {
-  // Only cards that are introduced and due
   const dueCards = useMemo(() =>
     store.deck.filter((c) => {
       const prog = store.cards[c.id] ?? {};
@@ -506,7 +556,7 @@ function Flashcards({ store, setStore, onXP }) {
   return (
     <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2">
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-6 min-h-[280px] flex flex-col">
+        <div className="rounded-3xl border border-white/10 bg-white/5 p-6 min-h-[60dvh] sm:min-h-[320px] flex flex-col">
           <div className="text-sm text-slate-300">Card {idx + 1}/{dueCards.length}</div>
           <div className="mt-2 text-4xl font-extrabold tracking-tight">{card.en}</div>
           <div className="text-sm text-slate-400">{card.pos}</div>
@@ -642,38 +692,38 @@ function Quiz({ store, setStore, onXP }) {
 
   if (!started && !done) {
     return (
-      <Card>
+      <Card strong>
         <div className="flex items-center justify-between mb-4">
           <div className="font-semibold">Quiz</div>
-          <div className="text-xs text-slate-400">Choose mode and start</div>
+          <div className="text-xs text-slate-300">Choose mode and start</div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
-            <div className="text-sm mb-1">Mode</div>
+            <div className={LABEL}>Mode</div>
             <div className="flex gap-2">
               <button className={classNames("px-3 py-2 rounded", mode==="mc"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")} onClick={()=>setMode("mc")}>Multiple choice</button>
               <button className={classNames("px-3 py-2 rounded", mode==="type"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")} onClick={()=>setMode("type")}>Type answer</button>
             </div>
           </div>
           <div>
-            <div className="text-sm mb-1">Direction</div>
+            <div className={LABEL}>Direction</div>
             <div className="flex gap-2">
               <button className={classNames("px-3 py-2 rounded", dir==="en-th"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")} onClick={()=>setDir("en-th")}>EN → TH</button>
               <button className={classNames("px-3 py-2 rounded", dir==="th-en"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")} onClick={()=>setDir("th-en")}>TH → EN</button>
             </div>
           </div>
           <div>
-            <div className="text-sm mb-1">Number of questions</div>
-            <input type="number" min={5} max={50} step={5} value={count} onChange={(e)=>setCount(Number(e.target.value))} className="w-full rounded p-2 text-black" />
+            <label className={LABEL}>Number of questions</label>
+            <input type="number" min={5} max={50} step={5} value={count} onChange={(e)=>setCount(Number(e.target.value))} className={FIELD} />
           </div>
         </div>
         <div className="mt-4 flex items-center gap-3">
-          <button disabled={!canStart} onClick={start} className={classNames("px-4 py-2 rounded", canStart?"bg-emerald-500 hover:bg-emerald-600":"bg-white/10 cursor-not-allowed")}>Start</button>
+          <button disabled={!canStart} onClick={start} className={classNames("px-4 py-2 rounded text-white", canStart?"bg-emerald-500 hover:bg-emerald-600":"bg-white/10 cursor-not-allowed")}>Start</button>
           {!canStart && <span className="text-xs text-rose-300">Need at least 4 words</span>}
         </div>
         {!!store.quizHistory?.length && (
           <div className="mt-6">
-            <div className="text-sm text-slate-400 mb-2">Recent quiz history</div>
+            <div className={classNames(HELP, "mb-2")}>Recent quiz history</div>
             <ul className="space-y-1 text-sm">
               {store.quizHistory.slice(-5).reverse().map((h, i)=>(
                 <li key={i} className="flex justify-between bg-white/5 rounded px-3 py-2">
@@ -691,9 +741,9 @@ function Quiz({ store, setStore, onXP }) {
   if (started) {
     const q = questions[qIndex];
     return (
-      <Card>
+      <Card strong>
         <div className="flex items-center justify-between mb-2">
-          <div className="text-sm text-slate-400">Question {qIndex+1}/{questions.length}</div>
+          <div className="text-sm text-slate-300">Question {qIndex+1}/{questions.length}</div>
           <div className="text-sm">Score: <b>{score}</b></div>
         </div>
         <div className="text-xl font-bold mb-3">{q.prompt}</div>
@@ -708,18 +758,17 @@ function Quiz({ store, setStore, onXP }) {
           </div>
         ) : (
           <form onSubmit={submitType} className="flex gap-2">
-            <input name="ans" autoFocus className="flex-1 rounded p-2 text-black" placeholder="Type your answer" />
-            <button type="submit" className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Submit</button>
+            <input name="ans" autoFocus className={`${FIELD} flex-1`} placeholder="Type your answer" />
+            <button type="submit" className="rounded bg-emerald-500 text-white px-4 py-2 hover:bg-emerald-600">Submit</button>
           </form>
         )}
       </Card>
     );
   }
 
-  // done
   const last = store.quizHistory.at(-1);
   return (
-    <Card>
+    <Card strong>
       <div className="text-lg font-bold mb-2">Summary</div>
       {last ? (
         <div className="mb-2 text-sm text-slate-300">{new Date(last.date).toLocaleString()} · {last.mode} · {last.dir}</div>
@@ -727,15 +776,12 @@ function Quiz({ store, setStore, onXP }) {
       <div className="text-2xl font-bold mb-3">Score: {score}/{questions.length}</div>
       <div className="flex gap-2">
         <button onClick={()=>{ setDone(false); setStarted(false); }} className="rounded bg-white/10 px-4 py-2 hover:bg-white/20">Change options</button>
-        <button onClick={start} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Restart</button>
+        <button onClick={start} className="rounded bg-emerald-500 text-white px-4 py-2 hover:bg-emerald-600">Restart</button>
       </div>
     </Card>
   );
 }
 
-// =============================================
-// Listening Lab (TTS + Mic recording + optional STT + scoring)
-// =============================================
 // =============================================
 // Listening Lab (TTS + Mic recording + optional STT + scoring) — JS version
 // =============================================
@@ -747,7 +793,6 @@ function ListeningLab({ store, onXP }) {
   const [scorePct, setScorePct] = useState(null);
   const audioRef = useRef(null);
 
-  // MediaRecorder
   const [recording, setRecording] = useState(false);
   const recorderRef = useRef(null);
   const chunksRef = useRef([]);
@@ -832,15 +877,15 @@ function ListeningLab({ store, onXP }) {
   }
 
   return (
-    <Card>
+    <Card strong>
       <div className="flex items-center justify-between mb-3">
         <div className="font-semibold">Listening & Speaking Lab</div>
-        <div className="text-xs text-slate-400">TTS playback · mic recording · optional STT</div>
+        <div className={HELP}>TTS playback · mic recording · optional STT</div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2">
-          <div className="mb-2 text-sm">Source</div>
+          <div className={LABEL}>Source</div>
           <div className="flex gap-2 mb-3">
             <button
               className={classNames("px-3 py-2 rounded", source==="deck"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}
@@ -854,8 +899,8 @@ function ListeningLab({ store, onXP }) {
 
           {source === "deck" ? (
             <div className="flex flex-col gap-2">
-              <label className="text-sm">Choose word</label>
-              <select className="rounded p-2 text-black" value={selectedId ?? ""} onChange={(e)=>setSelectedId(Number(e.target.value))}>
+              <label className={LABEL}>Choose word</label>
+              <select className={FIELD} value={selectedId ?? ""} onChange={(e)=>setSelectedId(Number(e.target.value))}>
                 {store.deck.map((d)=>(
                   <option key={d.id} value={d.id}>{d.en} — {d.th}</option>
                 ))}
@@ -863,8 +908,8 @@ function ListeningLab({ store, onXP }) {
             </div>
           ) : (
             <div className="flex flex-col gap-2">
-              <label className="text-sm">Custom English text</label>
-              <textarea className="rounded p-2 text-black" rows={3} placeholder="Type a sentence to practice" value={customText} onChange={(e)=>setCustomText(e.target.value)} />
+              <label className={LABEL}>Custom English text</label>
+              <textarea className={FIELD} rows={3} placeholder="Type a sentence to practice" value={customText} onChange={(e)=>setCustomText(e.target.value)} />
             </div>
           )}
 
@@ -899,10 +944,10 @@ function ListeningLab({ store, onXP }) {
           <audio ref={audioRef} src={audioURL ?? undefined} className="hidden" controls />
 
           <div className="mt-4">
-            <div className="text-sm text-slate-400 mb-1">Recognized text (or type your attempt)</div>
+            <div className={classNames(LABEL, "mb-1")}>Recognized text (or type your attempt)</div>
             <div className="flex gap-2">
-              <input className="flex-1 rounded p-2 text-black" value={recognized} onChange={(e)=>setRecognized(e.target.value)} placeholder="If STT is unavailable, type what you heard" />
-              <button onClick={()=> scoreInput(recognized)} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Check</button>
+              <input className={`${FIELD} flex-1`} value={recognized} onChange={(e)=>setRecognized(e.target.value)} placeholder="If STT is unavailable, type what you heard" />
+              <button onClick={()=> scoreInput(recognized)} className="rounded bg-emerald-500 text-white px-4 py-2 hover:bg-emerald-600">Check</button>
             </div>
             <div className="text-sm text-slate-300 mt-2">
               Target: <i>{expected || "(empty)"}</i>
@@ -917,8 +962,8 @@ function ListeningLab({ store, onXP }) {
 
         <div>
           <Card>
-            <div className="text-sm text-slate-400">Tips</div>
-            <ul className="mt-2 text-sm list-disc pl-5 space-y-1 text-slate-300">
+            <div className={LABEL}>Tips</div>
+            <ul className="mt-2 text-sm list-disc pl-5 space-y-1 text-slate-200">
               <li>Click <b>Play TTS</b> to hear the sentence.</li>
               <li>Use <b>Record</b> to capture your voice, then <b>Playback</b>.</li>
               <li>If your browser supports it, use <b>STT</b> to transcribe what you say.</li>
@@ -930,8 +975,6 @@ function ListeningLab({ store, onXP }) {
     </Card>
   );
 }
-
-// =============================================
 
 function ContentManager({ store, setStore }) {
   const fileRef = useRef(null);
@@ -961,17 +1004,17 @@ function ContentManager({ store, setStore }) {
   }
 
   return (
-    <Card>
+    <Card strong>
       <div className="flex items-center justify-between">
         <div>
           <div className="font-semibold">Import words from CSV</div>
-          <div className="text-sm text-slate-400">Headers: en, th, pos, example</div>
+          <div className={HELP}>Headers: en, th, pos, example</div>
         </div>
         <button className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-2" onClick={() => fileRef.current?.click()}>Choose file</button>
         <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={onFile} />
       </div>
       {error && <div className="text-rose-300 text-sm mt-2">{error}</div>}
-      <div className="mt-4 text-sm text-slate-300">Total words: {store.deck.length}</div>
+      <div className="mt-4 text-sm text-slate-200">Total words: {store.deck.length}</div>
     </Card>
   );
 }
@@ -1022,28 +1065,42 @@ function ManageWords({ store, setStore }) {
   }
 
   return (
-    <Card>
+    <Card strong>
       <div className="text-lg font-bold mb-4">Manage words</div>
+
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
-        <input className="w-full p-2 text-black rounded" placeholder="EN (word)" value={en} onChange={(e) => setEn(e.target.value)} />
-        <input className="w-full p-2 text-black rounded" placeholder="TH (meaning)" value={th} onChange={(e) => setTh(e.target.value)} />
-        <input className="w-full p-2 text-black rounded" placeholder="Example sentence (optional)" value={example} onChange={(e) => setExample(e.target.value)} />
-        <select className="w-full p-2 text-black rounded" value={pos} onChange={(e) => setPos(e.target.value)}>
-          <option value="noun">noun</option>
-          <option value="verb">verb</option>
-          <option value="adjective">adjective</option>
-          <option value="adverb">adverb</option>
-          <option value="noun/verb">noun/verb</option>
-        </select>
+        <div>
+          <label className={LABEL}>EN (word)</label>
+          <input className={FIELD} placeholder="increase" value={en} onChange={(e) => setEn(e.target.value)} />
+        </div>
+        <div>
+          <label className={LABEL}>TH (meaning)</label>
+          <input className={FIELD} placeholder="เพิ่มขึ้น" value={th} onChange={(e) => setTh(e.target.value)} />
+        </div>
+        <div className="md:col-span-2">
+          <label className={LABEL}>Example sentence (optional)</label>
+          <input className={FIELD} placeholder="Prices increase during peak season." value={example} onChange={(e) => setExample(e.target.value)} />
+        </div>
+        <div className="md:col-span-2">
+          <label className={LABEL}>Part of speech</label>
+          <select className={FIELD} value={pos} onChange={(e) => setPos(e.target.value)}>
+            <option value="noun">noun</option>
+            <option value="verb">verb</option>
+            <option value="adjective">adjective</option>
+            <option value="adverb">adverb</option>
+            <option value="noun/verb">noun/verb</option>
+          </select>
+        </div>
       </div>
+
       <div className="flex gap-2 mb-6">
         {editingId ? (
           <>
-            <button onClick={updateWord} className="px-4 py-2 bg-blue-500 rounded hover:bg-blue-600">Update</button>
-            <button onClick={clearForm} className="px-4 py-2 bg-gray-500 rounded hover:bg-gray-600">Cancel</button>
+            <button onClick={updateWord} className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">Update</button>
+            <button onClick={clearForm} className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600">Cancel</button>
           </>
         ) : (
-          <button onClick={addWord} className="px-4 py-2 bg-green-500 rounded hover:bg-green-600">Add</button>
+          <button onClick={addWord} className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600">Add</button>
         )}
       </div>
 
@@ -1056,8 +1113,8 @@ function ManageWords({ store, setStore }) {
                 {item.example ? <span className="text-slate-300"> · “{item.example}”</span> : null}
               </span>
               <div className="flex gap-2 shrink-0">
-                <button onClick={() => startEdit(item)} className="px-2 py-1 bg-yellow-500 rounded hover:bg-yellow-600 text-sm">Edit</button>
-                <button onClick={() => deleteWord(item.id)} className="px-2 py-1 bg-red-500 rounded hover:bg-red-600 text-sm">Delete</button>
+                <button onClick={() => startEdit(item)} className="px-2 py-1 bg-yellow-500 text-white rounded hover:bg-yellow-600 text-sm">Edit</button>
+                <button onClick={() => deleteWord(item.id)} className="px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-sm">Delete</button>
               </div>
             </li>
           ))}
@@ -1079,11 +1136,10 @@ function Settings({ store, setStore }) {
   }
 
   function rescheduleAll() {
-    // Immediately recompute due dates in a neutral way (quality = 4) respecting EF
     const cards = { ...store.cards };
     Object.keys(cards).forEach((id) => {
       const c = cards[id];
-      if (!c.introduced) return; // don't change not-yet-introduced cards
+      if (!c.introduced) return;
       const next = scheduleNext(c, 4, { easy: Number(easyInt), good: Number(goodInt), hard: Number(hardInt) });
       cards[id] = { ...c, due: next.due, interval: next.interval, ef: next.ef, reps: Math.max(c.reps, next.reps) };
     });
@@ -1091,30 +1147,36 @@ function Settings({ store, setStore }) {
   }
 
   return (
-    <Card>
+    <Card strong>
       <div className="text-lg font-bold mb-4">Settings: SRS & Goals</div>
 
-      <label className="block text-sm mb-1">Daily XP goal</label>
-      <input type="number" min={10} step={5} value={goal} onChange={(e) => setGoal(e.target.value)} className="mb-4 w-full rounded p-2 text-black" />
+      <label className={LABEL}>Daily XP goal</label>
+      <input type="number" min={10} step={5} value={goal} onChange={(e) => setGoal(e.target.value)} className={`${FIELD} mb-4`} />
 
       <div className="mb-4">
-        <div className="text-sm mb-1">Base review intervals (days) — aligned with Ebbinghaus forgetting curve</div>
+        <div className={LABEL}>Base review intervals (days) — aligned with Ebbinghaus forgetting curve</div>
         <div className="flex flex-wrap gap-3 mb-2">
-          <label className="flex items-center gap-2">Easy: <input type="number" min={1} value={easyInt} onChange={(e) => setEasyInt(e.target.value)} className="w-20 rounded p-1 text-black" /></label>
-          <label className="flex items-center gap-2">Good: <input type="number" min={1} value={goodInt} onChange={(e) => setGoodInt(e.target.value)} className="w-20 rounded p-1 text-black" /></label>
-          <label className="flex items-center gap-2">Hard: <input type="number" min={1} value={hardInt} onChange={(e) => setHardInt(e.target.value)} className="w-20 rounded p-1 text-black" /></label>
+          <label className="flex items-center gap-2">Easy:
+            <input type="number" min={1} value={easyInt} onChange={(e) => setEasyInt(e.target.value)} className={`${FIELD} w-24 text-right`} />
+          </label>
+          <label className="flex items-center gap-2">Good:
+            <input type="number" min={1} value={goodInt} onChange={(e) => setGoodInt(e.target.value)} className={`${FIELD} w-24 text-right`} />
+          </label>
+          <label className="flex items-center gap-2">Hard:
+            <input type="number" min={1} value={hardInt} onChange={(e) => setHardInt(e.target.value)} className={`${FIELD} w-24 text-right`} />
+          </label>
         </div>
-        <div className="text-xs text-slate-300">Tip: Hard≈1, Good≈2, Easy≈3 for the first rounds; later the EF expands the spacing.</div>
+        <div className={HELP}>Tip: Hard≈1, Good≈2, Easy≈3 for the first rounds; later the EF expands the spacing.</div>
       </div>
 
       <div className="mb-4">
-        <div className="text-sm mb-1">Daily new words</div>
-        <input type="number" min={0} value={dailyNew} onChange={(e) => setDailyNew(e.target.value)} className="w-32 rounded p-2 text-black" />
-        <div className="text-xs text-slate-300 mt-1">Each day up to this many unintroduced words will enter the review queue.</div>
+        <label className={LABEL}>Daily new words</label>
+        <input type="number" min={0} value={dailyNew} onChange={(e) => setDailyNew(e.target.value)} className={`${FIELD} w-32`} />
+        <div className={HELP}>Each day up to this many unintroduced words will enter the review queue.</div>
       </div>
 
       <div className="flex gap-2 mt-2">
-        <button onClick={saveSettings} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save</button>
+        <button onClick={saveSettings} className="rounded bg-emerald-500 text-white px-4 py-2 hover:bg-emerald-600">Save</button>
         <button onClick={rescheduleAll} className="rounded bg-white/10 border border-white/20 px-4 py-2 hover:bg-white/20">Recompute schedules</button>
       </div>
     </Card>
@@ -1123,7 +1185,7 @@ function Settings({ store, setStore }) {
 
 function Footer() {
   return (
-    <footer className="fixed bottom-0 left-0 right-0 border-t border-white/10 bg-black/30 backdrop-blur">
+    <footer className="hidden md:block fixed bottom-0 left-0 right-0 border-t border-white/10 bg-black/30 backdrop-blur">
       <div className="max-w-6xl mx-auto px-4 py-2 text-xs text-slate-400 flex items-center justify-between">
         <span>EN Trainer · © {new Date().getFullYear()}</span>
         <span>Built for Thai learners</span>
