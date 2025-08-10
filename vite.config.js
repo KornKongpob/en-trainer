@@ -10,8 +10,6 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       workbox: { cleanupOutdatedCaches: true },
-      // tip: disable during debugging if needed
-      // devOptions: { enabled: false },
       manifest: {
         name: 'EN Trainer',
         short_name: 'EN Trainer',
