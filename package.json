@@ -8,17 +8,18 @@
     "build": "node node_modules/vite/bin/vite.js build",
     "preview": "node node_modules/vite/bin/vite.js preview --port 4173"
   },
-  "dependencies": {
-    "framer-motion": "^12.23.12",
-    "lucide-react": "^0.539.0",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
-    "recharts": "^3.1.2"
-  },
+ "dependencies": {
+  "react": "^19.1.1",
+  "react-dom": "^19.1.1",
+  "framer-motion": "^12.23.12",
+  "lucide-react": "^0.539.0",
+  "recharts": "^3.1.2",
+  "ajv": "8.12.0"
+},
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
     "@vitejs/plugin-react": "^4.3.4",
-    "ajv": "^8.17.1",
+    "ajv": "^8.12.0",
     "tailwindcss": "^4.0.0",
     "vite": "^7.1.1",
     "vite-plugin-pwa": "^1.0.2"
