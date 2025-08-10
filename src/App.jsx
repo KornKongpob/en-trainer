@@ -5,7 +5,6 @@ import {
   Brain,
   CalendarCheck2,
   CheckCircle2,
-  Edit,
   Flame,
   Headphones,
   Home,
@@ -18,6 +17,8 @@ import {
   Mic,
   Square,
   Play,
+  Upload,
+  Edit,
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
 
@@ -116,7 +117,7 @@ const initCardProgress = (deck) => Object.fromEntries(
   }])
 );
 
-// quality: 2 (hard), 4 (good), 5 (easy/perfect)
+// quality: 2 (hard), 4 (good), 5 (easy)
 function scheduleNext(progress, quality, intervals) {
   let { ef, interval, reps = 0 } = progress;
 
@@ -243,7 +244,7 @@ export default function App() {
     <div className="min-h-[100dvh] bg-gradient-to-br from-indigo-950 via-slate-900 to-emerald-900 dark:from-slate-950 dark:via-zinc-950 dark:to-slate-900 text-slate-100">
       <Decor />
       <TopBar store={store} setStore={setStore} goalPct={goalPct} />
-      <main className="max-w-6xl mx-auto px-4 pb-[calc(76px+env(safe-area-inset-bottom))] md:pb-24">
+      <main className="mx-auto w-full max-w-[720px] sm:max-w-3xl px-3 sm:px-4 pb-[calc(88px+env(safe-area-inset-bottom))] pt-2 sm:pt-3">
         <Nav tab={tab} setTab={setTab} />
         <AnimatePresence mode="wait">
           {tab === "home" && (
@@ -297,8 +298,11 @@ function Decor() {
 
 function TopBar({ store, setStore, goalPct }) {
   return (
-    <header className="sticky top-0 z-40 backdrop-blur bg-black/30 border-b border-white/10">
-      <div className="max-w-6xl mx-auto flex items-center justify-between px-4 py-3">
+    <header
+      className="sticky top-0 z-40 backdrop-blur bg-black/30 border-b border-white/10"
+      style={{ paddingTop: 'env(safe-area-inset-top)' }}
+    >
+      <div className="max-w-3xl mx-auto flex items-center justify-between px-3 sm:px-4 py-2 sm:py-3">
         <div className="flex items-center gap-2">
           <Sparkles className="size-6 text-amber-300" />
           <span className="font-semibold tracking-wide">EN Trainer</span>
@@ -341,7 +345,7 @@ function Nav({ tab, setTab }) {
     { id: "settings", label: "Settings", icon: Sparkles },
   ];
   return (
-    <nav className="my-6 hidden md:grid grid-cols-2 md:grid-cols-5 gap-2">
+    <nav className="my-4 hidden md:grid grid-cols-2 md:grid-cols-5 gap-2">
       {items.map((it) => (
         <button
           key={it.id}
@@ -372,9 +376,9 @@ function BottomTabBar({ tab, setTab }) {
   return (
     <nav
       className="md:hidden fixed bottom-0 left-0 right-0 z-50 border-t border-white/10 bg-black/70 backdrop-blur supports-[backdrop-filter]:bg-black/40"
-      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 6px)" }}
     >
-      <div className="max-w-6xl mx-auto grid grid-cols-5">
+      <div className="mx-auto w-full max-w-[720px] grid grid-cols-5">
         {items.map((it) => {
           const Active = tab === it.id;
           return (
@@ -398,14 +402,14 @@ function BottomTabBar({ tab, setTab }) {
 
 function Hero() {
   return (
-    <section className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-emerald-700/40 to-cyan-700/40 border border-white/10 p-6 sm:p-10">
-      <motion.h1 initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: .05 }} className="text-2xl sm:text-4xl font-extrabold tracking-tight">
+    <section className="relative overflow-hidden rounded-2xl sm:rounded-3xl bg-gradient-to-r from-emerald-700/40 to-cyan-700/40 border border-white/10 p-5 sm:p-8">
+      <motion.h1 initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: .05 }} className="text-[26px] sm:text-4xl leading-tight font-extrabold tracking-tight">
         Learn English with goals, motivation, and clear progress
       </motion.h1>
       <motion.p initial={{ y: 10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} transition={{ delay: .15 }} className="mt-2 text-slate-200 max-w-2xl">
         Practice every day with flashcards, quizzes, listening, and speaking. The app tracks XP, streaks, and your progress automatically.
       </motion.p>
-      <div className="mt-6 flex flex-wrap gap-3">
+      <div className="mt-4 sm:mt-6 flex flex-wrap gap-3">
         <Badge icon={Trophy} text="Earn XP" />
         <Badge icon={Flame} text="Keep your streak" />
         <Badge icon={CalendarCheck2} text="Daily tracking" />
@@ -433,7 +437,7 @@ function Stats({ store, goalPct }) {
   }, [store.calendar]);
 
   return (
-    <section className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
+    <section className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
       <Card>
         <div className="flex items-center gap-3">
           <Flame className="size-6 text-orange-400" />
@@ -454,7 +458,7 @@ function Stats({ store, goalPct }) {
         </div>
       </Card>
       <Card>
-        <div className="h-24 sm:h-28 w-full">
+        <div className="h-20 sm:h-28 w-full">
           <div className="text-sm text-slate-400 mb-1 flex items-center gap-2"><CalendarCheck2 className="size-4" /> Last 7 days</div>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={last7} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -474,7 +478,7 @@ function Card({ children }) { return (<div className="rounded-3xl border border-
 
 function QuickStart({ setTab }) {
   return (
-    <section className="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-4">
+    <section className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
       <QSItem icon={BookOpen} title="Start flashcards" desc="Review words with Thai meanings" onClick={() => setTab("flashcards")} />
       <QSItem icon={Brain} title="Take a quiz" desc="Multiple choice and typing" onClick={() => setTab("quiz")} />
       <QSItem icon={Headphones} title="Listening / Speaking" desc="TTS playback, mic recording & STT" onClick={() => setTab("listen")} />
@@ -534,9 +538,9 @@ function Flashcards({ store, setStore, onXP }) {
   }
 
   return (
-    <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <section className="grid grid-cols-1 lg:grid-cols-3 gap-4">
       <div className="lg:col-span-2">
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-6 min-h-[60dvh] sm:min-h-[320px] flex flex-col">
+        <div className="rounded-3xl border border-white/10 bg-white/5 p-5 min-h-[48dvh] sm:min-h-[320px] flex flex-col">
           <div className="text-sm text-slate-300">Card {idx + 1}/{dueCards.length}</div>
           <div className="mt-2 text-4xl font-extrabold tracking-tight">{card.en}</div>
           <div className="text-sm text-slate-400">{card.pos}</div>
@@ -555,9 +559,9 @@ function Flashcards({ store, setStore, onXP }) {
               </motion.div>
             )}
           </AnimatePresence>
-          <div className="mt-auto pt-6 flex flex-wrap gap-2">
+          <div className="mt-auto pt-4 grid grid-cols-2 sm:flex gap-2">
             <button onClick={() => setShow(true)} className="rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-2">Show translation</button>
-            <div className="ml-auto flex gap-2">
+            <div className="col-span-2 sm:ml-auto flex gap-2">
               <button onClick={() => grade(2)} className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-2">Hard</button>
               <button onClick={() => grade(4)} className="rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-2">Good</button>
               <button onClick={() => grade(5)} className="rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-2">Easy</button>
@@ -592,7 +596,7 @@ function ProgressSection({ store }) {
   const days = Object.keys(store.calendar).sort();
   const totalXP = days.reduce((sum, k) => sum + (store.calendar[k] || 0), 0);
   return (
-    <section className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-4">
+    <section className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
       <Card>
         <div className="text-sm text-slate-400 mb-1 flex items-center gap-2"><CalendarCheck2 className="size-4" /> Progress summary</div>
         <div className="text-2xl font-bold">Total {totalXP} XP</div>
@@ -988,9 +992,111 @@ function ListeningLab({ store, onXP }) {
 }
 
 /* =============================================
-   Content Manager (CSV import)
+   Settings (SRS/Goals + CSV Import + Manage Words)
 ============================================= */
-function ContentManager({ store, setStore }) {
+function Settings({ store, setStore }) {
+  const [subtab, setSubtab] = useState("srs"); // srs | import | manage
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-lg font-bold">Settings</div>
+      </div>
+
+      <div className="flex gap-2 mb-4 overflow-x-auto no-scrollbar">
+        <button
+          className={classNames("px-3 py-2 rounded-full border", subtab==="srs"?"bg-emerald-500/30 border-emerald-400":"bg-white/10 border-white/10")}
+          onClick={()=>setSubtab("srs")}
+        >
+          SRS & Goals
+        </button>
+        <button
+          className={classNames("px-3 py-2 rounded-full border inline-flex items-center gap-2", subtab==="import"?"bg-emerald-500/30 border-emerald-400":"bg-white/10 border-white/10")}
+          onClick={()=>setSubtab("import")}
+        >
+          <Upload className="size-4" /> Import CSV
+        </button>
+        <button
+          className={classNames("px-3 py-2 rounded-full border inline-flex items-center gap-2", subtab==="manage"?"bg-emerald-500/30 border-emerald-400":"bg-white/10 border-white/10")}
+          onClick={()=>setSubtab("manage")}
+        >
+          <Edit className="size-4" /> Manage Words
+        </button>
+      </div>
+
+      {subtab === "srs" && <SettingsSRS store={store} setStore={setStore} />}
+      {subtab === "import" && <SettingsImport store={store} setStore={setStore} />}
+      {subtab === "manage" && <SettingsManage store={store} setStore={setStore} />}
+    </Card>
+  );
+}
+
+function SettingsSRS({ store, setStore }) {
+  const [goal, setGoal] = useState(store.goal);
+  const [easyInt, setEasyInt] = useState(store.intervals?.easy ?? 3);
+  const [goodInt, setGoodInt] = useState(store.intervals?.good ?? 2);
+  const [hardInt, setHardInt] = useState(store.intervals?.hard ?? 1);
+  const [dailyNew, setDailyNew] = useState(store.dailyNew ?? 10);
+
+  function saveSettings() {
+    setStore((s) => ({ ...s, goal: Number(goal), intervals: { easy: Number(easyInt), good: Number(goodInt), hard: Number(hardInt) }, dailyNew: Number(dailyNew) }));
+  }
+
+  function rescheduleAll() {
+    const cards = { ...store.cards };
+    Object.keys(cards).forEach((id) => {
+      const c = cards[id];
+      if (!c.introduced) return;
+      const next = scheduleNext(c, 4, { easy: Number(easyInt), good: Number(goodInt), hard: Number(hardInt) });
+      cards[id] = { ...c, due: next.due, interval: next.interval, ef: next.ef, reps: Math.max(c.reps, next.reps) };
+    });
+    setStore((s) => ({ ...s, cards }));
+  }
+
+  return (
+    <div>
+      <label className="block text-sm mb-1">Daily XP goal</label>
+      <input
+        type="number" min={10} step={5} value={goal}
+        onChange={(e) => setGoal(e.target.value)}
+        className="mb-4 w-full rounded p-2 bg-white text-black placeholder-slate-500"
+      />
+
+      <div className="mb-4">
+        <div className="text-sm mb-1">Base review intervals (days)</div>
+        <div className="flex flex-wrap gap-3 mb-2">
+          <label className="flex items-center gap-2">Easy:
+            <input type="number" min={1} value={easyInt} onChange={(e) => setEasyInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
+          </label>
+          <label className="flex items-center gap-2">Good:
+            <input type="number" min={1} value={goodInt} onChange={(e) => setGoodInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
+          </label>
+          <label className="flex items-center gap-2">Hard:
+            <input type="number" min={1} value={hardInt} onChange={(e) => setHardInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
+          </label>
+        </div>
+        <div className="text-xs text-slate-300">Tip: Hard≈1, Good≈2, Easy≈3 for first rounds; EF expands spacing later.</div>
+      </div>
+
+      <div className="mb-4">
+        <div className="text-sm mb-1">Daily new words</div>
+        <input
+          type="number" min={0} value={dailyNew}
+          onChange={(e) => setDailyNew(e.target.value)}
+          className="w-32 rounded p-2 bg-white text-black"
+        />
+        <div className="text-xs text-slate-300 mt-1">Each day up to this many unintroduced words will enter the review queue.</div>
+      </div>
+
+      <div className="flex gap-2 mt-2">
+        <button onClick={saveSettings} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save</button>
+        <button onClick={rescheduleAll} className="rounded bg-white/10 border border-white/20 px-4 py-2 hover:bg-white/20">Recompute schedules</button>
+      </div>
+    </div>
+  );
+}
+
+function SettingsImport({ store, setStore }) {
   const fileRef = useRef(null);
   const [error, setError] = useState("");
 
@@ -1019,25 +1125,24 @@ function ContentManager({ store, setStore }) {
   }
 
   return (
-    <Card>
+    <div>
       <div className="flex items-center justify-between">
         <div>
           <div className="font-semibold">Import words from CSV</div>
           <div className="text-sm text-slate-400">Headers: en, th, pos, example</div>
         </div>
-        <button className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-2" onClick={() => fileRef.current?.click()}>Choose file</button>
+        <button className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-2 inline-flex items-center gap-2" onClick={() => fileRef.current?.click()}>
+          <Upload className="size-4" /> Choose file
+        </button>
         <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={onFile} />
       </div>
       {error && <div className="text-rose-300 text-sm mt-2">{error}</div>}
       <div className="mt-4 text-sm text-slate-300">Total words: {store.deck.length}</div>
-    </Card>
+    </div>
   );
 }
 
-/* =============================================
-   Manage Words (manual CRUD)
-============================================= */
-function ManageWords({ store, setStore }) {
+function SettingsManage({ store, setStore }) {
   const [en, setEn] = useState("");
   const [th, setTh] = useState("");
   const [example, setExample] = useState("");
@@ -1084,8 +1189,8 @@ function ManageWords({ store, setStore }) {
   }
 
   return (
-    <Card>
-      <div className="text-lg font-bold mb-4">Manage words</div>
+    <div>
+      <div className="text-lg font-semibold mb-3">Manage words</div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
         <input className="w-full p-2 bg-white text-black rounded placeholder-slate-500" placeholder="EN (word)" value={en} onChange={(e) => setEn(e.target.value)} />
         <input className="w-full p-2 bg-white text-black rounded placeholder-slate-500" placeholder="TH (meaning)" value={th} onChange={(e) => setTh(e.target.value)} />
@@ -1125,101 +1230,6 @@ function ManageWords({ store, setStore }) {
           ))}
         </ul>
       </div>
-    </Card>
-  );
-}
-
-/* =============================================
-   Settings (now with sub-features)
-============================================= */
-function Settings({ store, setStore }) {
-  const [sub, setSub] = useState("srs"); // 'srs' | 'csv' | 'manage'
-
-  // state for SRS sub-tab
-  const [goal, setGoal] = useState(store.goal);
-  const [easyInt, setEasyInt] = useState(store.intervals?.easy ?? 3);
-  const [goodInt, setGoodInt] = useState(store.intervals?.good ?? 2);
-  const [hardInt, setHardInt] = useState(store.intervals?.hard ?? 1);
-  const [dailyNew, setDailyNew] = useState(store.dailyNew ?? 10);
-
-  function saveSettings() {
-    setStore((s) => ({ ...s, goal: Number(goal), intervals: { easy: Number(easyInt), good: Number(goodInt), hard: Number(hardInt) }, dailyNew: Number(dailyNew) }));
-  }
-
-  function rescheduleAll() {
-    const cards = { ...store.cards };
-    Object.keys(cards).forEach((id) => {
-      const c = cards[id];
-      if (!c.introduced) return;
-      const next = scheduleNext(c, 4, { easy: Number(easyInt), good: Number(goodInt), hard: Number(hardInt) });
-      cards[id] = { ...c, due: next.due, interval: next.interval, ef: next.ef, reps: Math.max(c.reps, next.reps) };
-    });
-    setStore((s) => ({ ...s, cards }));
-  }
-
-  return (
-    <div className="space-y-4">
-      {/* Sub-nav */}
-      <Card>
-        <div className="flex flex-wrap gap-2">
-          <button onClick={()=>setSub("srs")} className={classNames("px-3 py-2 rounded", sub==="srs" ? "bg-emerald-500/30" : "bg-white/10 hover:bg-white/20")}>
-            SRS & Goals
-          </button>
-          <button onClick={()=>setSub("csv")} className={classNames("px-3 py-2 rounded", sub==="csv" ? "bg-emerald-500/30" : "bg-white/10 hover:bg-white/20")}>
-            Import CSV
-          </button>
-          <button onClick={()=>setSub("manage")} className={classNames("px-3 py-2 rounded", sub==="manage" ? "bg-emerald-500/30" : "bg-white/10 hover:bg-white/20")}>
-            Manage Words
-          </button>
-        </div>
-      </Card>
-
-      {sub === "srs" && (
-        <Card>
-          <div className="text-lg font-bold mb-4">Settings: SRS & Goals</div>
-
-          <label className="block text-sm mb-1">Daily XP goal</label>
-          <input
-            type="number" min={10} step={5} value={goal}
-            onChange={(e) => setGoal(e.target.value)}
-            className="mb-4 w-full rounded p-2 bg-white text-black placeholder-slate-500"
-          />
-
-          <div className="mb-4">
-            <div className="text-sm mb-1">Base review intervals (days)</div>
-            <div className="flex flex-wrap gap-3 mb-2">
-              <label className="flex items-center gap-2">Easy:
-                <input type="number" min={1} value={easyInt} onChange={(e) => setEasyInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
-              </label>
-              <label className="flex items-center gap-2">Good:
-                <input type="number" min={1} value={goodInt} onChange={(e) => setGoodInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
-              </label>
-              <label className="flex items-center gap-2">Hard:
-                <input type="number" min={1} value={hardInt} onChange={(e) => setHardInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
-              </label>
-            </div>
-            <div className="text-xs text-slate-300">Tip: Hard≈1, Good≈2, Easy≈3 for first rounds; EF expands spacing later.</div>
-          </div>
-
-          <div className="mb-4">
-            <div className="text-sm mb-1">Daily new words</div>
-            <input
-              type="number" min={0} value={dailyNew}
-              onChange={(e) => setDailyNew(e.target.value)}
-              className="w-32 rounded p-2 bg-white text-black"
-            />
-            <div className="text-xs text-slate-300 mt-1">Each day up to this many unintroduced words will enter the review queue.</div>
-          </div>
-
-          <div className="flex gap-2 mt-2">
-            <button onClick={saveSettings} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save</button>
-            <button onClick={rescheduleAll} className="rounded bg-white/10 border border-white/20 px-4 py-2 hover:bg-white/20">Recompute schedules</button>
-          </div>
-        </Card>
-      )}
-
-      {sub === "csv" && <ContentManager store={store} setStore={setStore} />}
-      {sub === "manage" && <ManageWords store={store} setStore={setStore} />}
     </div>
   );
 }
@@ -1227,7 +1237,7 @@ function Settings({ store, setStore }) {
 function Footer() {
   return (
     <footer className="hidden md:block fixed bottom-0 left-0 right-0 border-t border-white/10 bg-black/30 backdrop-blur">
-      <div className="max-w-6xl mx-auto px-4 py-2 text-xs text-slate-400 flex items-center justify-between">
+      <div className="mx-auto w-full max-w-[720px] sm:max-w-3xl px-4 py-2 text-xs text-slate-400 flex items-center justify-between">
         <span>EN Trainer · © {new Date().getFullYear()}</span>
         <span>Built for Thai learners</span>
       </div>
