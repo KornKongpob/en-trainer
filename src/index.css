@@ -1,0 +1,4 @@
+@import "tailwindcss";
+
+/* ทำให้สลับธีมด้วยการใส่คลาส .dark ที่ <html> ใช้ได้ใน v4 */
+@custom-variant dark (&:where(.dark, .dark *));
