@@ -1,5 +1,6 @@
 import React, { useRef, useState } from "react";
 import { CalendarCheck2, Sun, Moon } from "lucide-react";
+import { Search, X } from "lucide-react";
 
 const classNames = (...a) => a.filter(Boolean).join(" ");
 
@@ -164,12 +165,17 @@ function CSVImportCard({ store, setStore, parseCSV, todayKey }) {
 }
 
 /* ============ Manage Words ============ */
-function ManageWordsCard({ store, setStore, todayKey }) {
+function ManageWords({ store, setStore }) {
   const [en, setEn] = useState("");
   const [th, setTh] = useState("");
   const [example, setExample] = useState("");
   const [pos, setPos] = useState("noun");
   const [editingId, setEditingId] = useState(null);
+
+  // NEW: search & sort controls
+  const [q, setQ] = useState("");
+  const [field, setField] = useState("all");      // all | en | th
+  const [sort, setSort] = useState("newest");     // newest | az | za
 
   function clearForm() {
     setEn(""); setTh(""); setExample(""); setPos("noun"); setEditingId(null);
@@ -177,26 +183,35 @@ function ManageWordsCard({ store, setStore, todayKey }) {
 
   function addWord() {
     if (!en.trim() || !th.trim()) return alert("Please enter EN and TH.");
-    const lastDeck = store.deck.at(-1);
+    const lastDeck = store.deck[store.deck.length - 1];
     const nextId = (lastDeck?.id || 0) + 1;
     const newCard = { id: nextId, en, th, pos, example };
     const newDeck = [...store.deck, newCard];
     setStore((s) => ({
       ...s,
       deck: newDeck,
-      cards: { ...s.cards, [nextId]: { ef: 2.5, interval: 0, due: todayKey(), correct: 0, wrong: 0, reps: 0, introduced: false, introducedOn: null } }
+      cards: {
+        ...s.cards,
+        [nextId]: {
+          ef: 2.5, interval: 0, due: todayKey(), correct: 0, wrong: 0, reps: 0,
+          introduced: false, introducedOn: null
+        }
+      }
     }));
     clearForm();
   }
 
   function startEdit(card) {
     setEditingId(card.id);
-    setEn(card.en); setTh(card.th); setExample(card.example || ""); setPos(card.pos || "noun");
+    setEn(card.en); setTh(card.th);
+    setExample(card.example || ""); setPos(card.pos || "noun");
   }
 
   function updateWord() {
     if (!editingId) return;
-    const newDeck = store.deck.map((c) => c.id === editingId ? { ...c, en, th, example, pos } : c);
+    const newDeck = store.deck.map((c) =>
+      c.id === editingId ? { ...c, en, th, example, pos } : c
+    );
     setStore((s) => ({ ...s, deck: newDeck }));
     clearForm();
   }
@@ -210,21 +225,113 @@ function ManageWordsCard({ store, setStore, todayKey }) {
     if (editingId === id) clearForm();
   }
 
+  // ---------- Search / sort ----------
+  const filtered = useMemo(() => {
+    const query = q.trim().toLowerCase();
+    let list = store.deck;
+
+    if (query) {
+      list = list.filter((c) => {
+        const enL = c.en.toLowerCase();
+        const thL = c.th.toLowerCase();
+        const exL = (c.example || "").toLowerCase();
+        if (field === "en") return enL.includes(query);
+        if (field === "th") return thL.includes(query);
+        return enL.includes(query) || thL.includes(query) || exL.includes(query);
+      });
+    }
+
+    if (sort === "az") list = [...list].sort((a, b) => a.en.localeCompare(b.en));
+    else if (sort === "za") list = [...list].sort((a, b) => b.en.localeCompare(a.en));
+    else if (sort === "newest") list = [...list].sort((a, b) => b.id - a.id);
+
+    return list;
+  }, [store.deck, q, field, sort]);
+
+  function highlight(str, query) {
+    if (!query) return str;
+    const i = str.toLowerCase().indexOf(query.toLowerCase());
+    if (i === -1) return str;
+    const before = str.slice(0, i);
+    const hit = str.slice(i, i + query.length);
+    const after = str.slice(i + query.length);
+    return (
+      <>
+        {before}
+        <mark className="px-0.5 rounded bg-amber-300/60 text-slate-900">{hit}</mark>
+        {after}
+      </>
+    );
+  }
+
   return (
-    <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
-      <div className="text-md font-semibold mb-3">Manage words</div>
+    <Card>
+      <div className="text-lg font-bold mb-4">Manage words</div>
+
+      {/* Search & sort */}
+      <div className="mb-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="relative">
+          <Search className="size-4 absolute left-2 top-1/2 -translate-y-1/2 text-slate-500" />
+          <input
+            className="w-full pl-8 pr-8 p-2 rounded bg-white text-black placeholder-slate-500"
+            placeholder="Search (EN / TH / example)"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+          {q && (
+            <button
+              onClick={() => setQ("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-600 hover:text-slate-800"
+              aria-label="Clear search"
+            >
+              <X className="size-4" />
+            </button>
+          )}
+        </div>
+
+        <select
+          className="rounded p-2 bg-white text-black"
+          value={field}
+          onChange={(e) => setField(e.target.value)}
+        >
+          <option value="all">Search in all fields</option>
+          <option value="en">Only English</option>
+          <option value="th">Only Thai</option>
+        </select>
+
+        <select
+          className="rounded p-2 bg-white text-black"
+          value={sort}
+          onChange={(e) => setSort(e.target.value)}
+        >
+          <option value="newest">Sort: Newest first</option>
+          <option value="az">Sort: A → Z</option>
+          <option value="za">Sort: Z → A</option>
+        </select>
+      </div>
+
+      <div className="text-xs text-slate-300 mb-3">
+        Showing <b>{filtered.length}</b> of <b>{store.deck.length}</b> words
+      </div>
+
+      {/* Form */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
-        <input className="w-full p-2 bg-white text-black rounded placeholder-slate-500" placeholder="EN (word)" value={en} onChange={(e) => setEn(e.target.value)} />
-        <input className="w-full p-2 bg-white text-black rounded placeholder-slate-500" placeholder="TH (meaning)" value={th} onChange={(e) => setTh(e.target.value)} />
-        <input className="w-full p-2 bg-white text-black rounded placeholder-slate-500" placeholder="Example sentence (optional)" value={example} onChange={(e) => setExample(e.target.value)} />
+        <input className="w-full p-2 bg-white text-black rounded placeholder-slate-500"
+               placeholder="EN (word)" value={en} onChange={(e) => setEn(e.target.value)} />
+        <input className="w-full p-2 bg-white text-black rounded placeholder-slate-500"
+               placeholder="TH (meaning)" value={th} onChange={(e) => setTh(e.target.value)} />
+        <input className="w-full p-2 bg-white text-black rounded placeholder-slate-500"
+               placeholder="Example sentence (optional)" value={example} onChange={(e) => setExample(e.target.value)} />
         <select className="w-full p-2 bg-white text-black rounded" value={pos} onChange={(e) => setPos(e.target.value)}>
           <option value="noun">noun</option>
           <option value="verb">verb</option>
           <option value="adjective">adjective</option>
           <option value="adverb">adverb</option>
           <option value="noun/verb">noun/verb</option>
+          <option value="phrasal verb">phrasal verb</option>
         </select>
       </div>
+
       <div className="flex gap-2 mb-6">
         {editingId ? (
           <>
@@ -236,13 +343,17 @@ function ManageWordsCard({ store, setStore, todayKey }) {
         )}
       </div>
 
+      {/* List */}
       <div className="max-h-80 overflow-auto pr-1">
         <ul className="space-y-2">
-          {store.deck.map((item) => (
+          {filtered.map((item) => (
             <li key={item.id} className="flex justify-between items-center gap-3 bg-white/5 px-3 py-2 rounded-xl">
               <span className="text-sm">
-                <b>{item.en}</b> — {item.th} <i className="text-slate-300">({item.pos})</i>
-                {item.example ? <span className="text-slate-300"> · “{item.example}”</span> : null}
+                <b>{highlight(item.en, q)}</b> — {highlight(item.th, q)}{" "}
+                <i className="text-slate-300">({item.pos})</i>
+                {item.example ? (
+                  <span className="text-slate-300"> · “{highlight(item.example, q)}”</span>
+                ) : null}
               </span>
               <div className="flex gap-2 shrink-0">
                 <button onClick={() => startEdit(item)} className="px-2 py-1 bg-yellow-500 rounded hover:bg-yellow-600 text-sm">Edit</button>
@@ -252,6 +363,7 @@ function ManageWordsCard({ store, setStore, todayKey }) {
           ))}
         </ul>
       </div>
-    </div>
+    </Card>
   );
 }
+
