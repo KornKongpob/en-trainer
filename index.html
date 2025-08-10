@@ -1,16 +1,28 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <!-- สำหรับ Android/Chrome -->
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="mobile-web-app-capable" content="yes">
-<!-- สำหรับ iOS/Safari -->
-<meta name="apple-mobile-web-app-capable" content="yes">
-<link rel="apple-touch-icon" href="/icons/icon-192.png">
-<meta name="apple-mobile-web-app-title" content="EN Trainer">
-<!-- (ถ้าต้องการ) -->
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta charset="utf-8" />
+    <title>EN Trainer</title>
+    <meta name="description" content="Learn English with flashcards, quizzes, listening & speaking. Mobile-first PWA." />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 
+    <!-- PWA colors -->
+    <meta name="theme-color" content="#10b981" />
+
+    <!-- Android/Chrome PWA -->
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <!-- iOS/Safari PWA -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="EN Trainer" />
+
+    <!-- Icons (place these files in /public/icons) -->
+    <link rel="icon" href="/icons/icon-192.png" sizes="192x192" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+    <link rel="apple-touch-icon" sizes="512x512" href="/icons/icon-512.png" />
+    <!-- Optional maskable icon improves Android UI -->
+    <link rel="manifest" href="/manifest.webmanifest" />
   </head>
   <body>
     <div id="root"></div>
