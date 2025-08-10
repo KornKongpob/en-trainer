@@ -9,7 +9,6 @@ import {
   Flame,
   Headphones,
   Home,
-  Languages,
   Moon,
   Sparkles,
   Star,
@@ -159,7 +158,7 @@ export default function App() {
     calendar: {},
     quizHistory: [],
     intervals: { easy: 3, good: 2, hard: 1 },
-    dailyNew: 10, // introduce up to N new words each day
+    dailyNew: 10,
   });
 
   // Patch older saves
@@ -270,16 +269,6 @@ export default function App() {
               <ListeningLab store={store} onXP={addXP} />
             </motion.div>
           )}
-          {tab === "custom" && (
-            <motion.div key="custom" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-              <ContentManager store={store} setStore={setStore} />
-            </motion.div>
-          )}
-          {tab === "manage" && (
-            <motion.div key="manage" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-              <ManageWords store={store} setStore={setStore} />
-            </motion.div>
-          )}
           {tab === "settings" && (
             <motion.div key="settings" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
               <Settings store={store} setStore={setStore} />
@@ -349,12 +338,10 @@ function Nav({ tab, setTab }) {
     { id: "flashcards", label: "Flashcards", icon: BookOpen },
     { id: "quiz", label: "Quiz", icon: Brain },
     { id: "listen", label: "Listening", icon: Headphones },
-    { id: "custom", label: "Add Words", icon: Languages },
-    { id: "manage", label: "Manage Words", icon: Edit },
     { id: "settings", label: "Settings", icon: Sparkles },
   ];
   return (
-    <nav className="my-6 hidden md:grid grid-cols-2 md:grid-cols-7 gap-2">
+    <nav className="my-6 hidden md:grid grid-cols-2 md:grid-cols-5 gap-2">
       {items.map((it) => (
         <button
           key={it.id}
@@ -1143,9 +1130,12 @@ function ManageWords({ store, setStore }) {
 }
 
 /* =============================================
-   Settings
+   Settings (now with sub-features)
 ============================================= */
 function Settings({ store, setStore }) {
+  const [sub, setSub] = useState("srs"); // 'srs' | 'csv' | 'manage'
+
+  // state for SRS sub-tab
   const [goal, setGoal] = useState(store.goal);
   const [easyInt, setEasyInt] = useState(store.intervals?.easy ?? 3);
   const [goodInt, setGoodInt] = useState(store.intervals?.good ?? 2);
@@ -1168,47 +1158,69 @@ function Settings({ store, setStore }) {
   }
 
   return (
-    <Card>
-      <div className="text-lg font-bold mb-4">Settings: SRS & Goals</div>
-
-      <label className="block text-sm mb-1">Daily XP goal</label>
-      <input
-        type="number" min={10} step={5} value={goal}
-        onChange={(e) => setGoal(e.target.value)}
-        className="mb-4 w-full rounded p-2 bg-white text-black placeholder-slate-500"
-      />
-
-      <div className="mb-4">
-        <div className="text-sm mb-1">Base review intervals (days)</div>
-        <div className="flex flex-wrap gap-3 mb-2">
-          <label className="flex items-center gap-2">Easy:
-            <input type="number" min={1} value={easyInt} onChange={(e) => setEasyInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
-          </label>
-          <label className="flex items-center gap-2">Good:
-            <input type="number" min={1} value={goodInt} onChange={(e) => setGoodInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
-          </label>
-          <label className="flex items-center gap-2">Hard:
-            <input type="number" min={1} value={hardInt} onChange={(e) => setHardInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
-          </label>
+    <div className="space-y-4">
+      {/* Sub-nav */}
+      <Card>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={()=>setSub("srs")} className={classNames("px-3 py-2 rounded", sub==="srs" ? "bg-emerald-500/30" : "bg-white/10 hover:bg-white/20")}>
+            SRS & Goals
+          </button>
+          <button onClick={()=>setSub("csv")} className={classNames("px-3 py-2 rounded", sub==="csv" ? "bg-emerald-500/30" : "bg-white/10 hover:bg-white/20")}>
+            Import CSV
+          </button>
+          <button onClick={()=>setSub("manage")} className={classNames("px-3 py-2 rounded", sub==="manage" ? "bg-emerald-500/30" : "bg-white/10 hover:bg-white/20")}>
+            Manage Words
+          </button>
         </div>
-        <div className="text-xs text-slate-300">Tip: Hard≈1, Good≈2, Easy≈3 for first rounds; EF expands spacing later.</div>
-      </div>
+      </Card>
 
-      <div className="mb-4">
-        <div className="text-sm mb-1">Daily new words</div>
-        <input
-          type="number" min={0} value={dailyNew}
-          onChange={(e) => setDailyNew(e.target.value)}
-          className="w-32 rounded p-2 bg-white text-black"
-        />
-        <div className="text-xs text-slate-300 mt-1">Each day up to this many unintroduced words will enter the review queue.</div>
-      </div>
+      {sub === "srs" && (
+        <Card>
+          <div className="text-lg font-bold mb-4">Settings: SRS & Goals</div>
 
-      <div className="flex gap-2 mt-2">
-        <button onClick={saveSettings} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save</button>
-        <button onClick={rescheduleAll} className="rounded bg-white/10 border border-white/20 px-4 py-2 hover:bg-white/20">Recompute schedules</button>
-      </div>
-    </Card>
+          <label className="block text-sm mb-1">Daily XP goal</label>
+          <input
+            type="number" min={10} step={5} value={goal}
+            onChange={(e) => setGoal(e.target.value)}
+            className="mb-4 w-full rounded p-2 bg-white text-black placeholder-slate-500"
+          />
+
+          <div className="mb-4">
+            <div className="text-sm mb-1">Base review intervals (days)</div>
+            <div className="flex flex-wrap gap-3 mb-2">
+              <label className="flex items-center gap-2">Easy:
+                <input type="number" min={1} value={easyInt} onChange={(e) => setEasyInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
+              </label>
+              <label className="flex items-center gap-2">Good:
+                <input type="number" min={1} value={goodInt} onChange={(e) => setGoodInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
+              </label>
+              <label className="flex items-center gap-2">Hard:
+                <input type="number" min={1} value={hardInt} onChange={(e) => setHardInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
+              </label>
+            </div>
+            <div className="text-xs text-slate-300">Tip: Hard≈1, Good≈2, Easy≈3 for first rounds; EF expands spacing later.</div>
+          </div>
+
+          <div className="mb-4">
+            <div className="text-sm mb-1">Daily new words</div>
+            <input
+              type="number" min={0} value={dailyNew}
+              onChange={(e) => setDailyNew(e.target.value)}
+              className="w-32 rounded p-2 bg-white text-black"
+            />
+            <div className="text-xs text-slate-300 mt-1">Each day up to this many unintroduced words will enter the review queue.</div>
+          </div>
+
+          <div className="flex gap-2 mt-2">
+            <button onClick={saveSettings} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save</button>
+            <button onClick={rescheduleAll} className="rounded bg-white/10 border border-white/20 px-4 py-2 hover:bg-white/20">Recompute schedules</button>
+          </div>
+        </Card>
+      )}
+
+      {sub === "csv" && <ContentManager store={store} setStore={setStore} />}
+      {sub === "manage" && <ManageWords store={store} setStore={setStore} />}
+    </div>
   );
 }
 
