@@ -1,41 +1,38 @@
-import React, { useEffect, useMemo, useState, Suspense, lazy } from "react";
+import React, { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  BookOpen, Brain, CalendarCheck2, CheckCircle2, Edit, Flame, Headphones,
-  Home, Languages, Moon, Sparkles, Star, Sun, Trophy, Volume2
+  BookOpen,
+  Brain,
+  CalendarCheck2,
+  CheckCircle2,
+  Edit,
+  Flame,
+  Headphones,
+  Home,
+  Languages,
+  Moon,
+  Sparkles,
+  Star,
+  Sun,
+  Trophy,
+  Volume2,
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
 
-/* ========= Lazy tabs ========= */
-const Quiz = lazy(() => import("./tabs/Quiz.jsx"));
-const ListeningLab = lazy(() => import("./tabs/ListeningLab.jsx"));
-const Settings = lazy(() => import("./tabs/Settings.jsx"));
+// Lazy tabs
+const Quiz = React.lazy(() => import("./tabs/Quiz.jsx"));
+const ListeningLab = React.lazy(() => import("./tabs/ListeningLab.jsx"));
+const Settings = React.lazy(() => import("./tabs/Settings.jsx"));
 
-/* ========= Helpers ========= */
+/* =============================================
+   Helpers
+============================================= */
+const last = (arr) => (Array.isArray(arr) && arr.length ? arr[arr.length - 1] : undefined);
 const classNames = (...a) => a.filter(Boolean).join(" ");
-const LS_KEY = "th_en_learning_v2";
-const localDateKey = (d = new Date()) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-const dateFromKey = (k) => { const [y, m, d] = k.split("-").map(Number); return new Date(y, m - 1, d); };
-const todayKey = () => localDateKey();
 
-function loadState() { try { const raw = localStorage.getItem(LS_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; } }
-function saveState(state) { try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch {} }
-function usePersistentState(defaults) {
-  const [state, setState] = useState(() => loadState() ?? defaults);
-  useEffect(() => { saveState(state); }, [state]);
-  return [state, setState];
-}
-function speak(text, lang = "en-US") {
-  try {
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = lang;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(u);
-  } catch {}
-}
-
-/* ========= SRS ========= */
+/* =============================================
+   Data & Utilities
+============================================= */
 const DEFAULT_DECK = [
   { id: 1, en: "increase", th: "เพิ่มขึ้น", pos: "verb", example: "Prices increase during peak season." },
   { id: 2, en: "decrease", th: "ลดลง", pos: "verb", example: "Sales decreased last quarter." },
@@ -49,26 +46,109 @@ const DEFAULT_DECK = [
   { id: 10, en: "confirm", th: "ยืนยัน", pos: "verb", example: "Please confirm the order." },
 ];
 
+const LS_KEY = "th_en_learning_v2";
+const localDateKey = (d = new Date()) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+const dateFromKey = (k) => { const [y, m, d] = k.split("-").map(Number); return new Date(y, m - 1, d); };
+const todayKey = () => localDateKey();
+
+function loadState() { try { const raw = localStorage.getItem(LS_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; } }
+function saveState(state) { try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch {} }
+function usePersistentState(defaults) {
+  const [state, setState] = useState(() => loadState() ?? defaults);
+  useEffect(() => { saveState(state); }, [state]);
+  return [state, setState];
+}
+
+function speak(text, lang = "en-US") {
+  try {
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = lang;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
+  } catch {}
+}
+
+function parseCSV(text) {
+  const t = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const lines = [];
+  let i = 0, field = '', row = [], inQuotes = false;
+  while (i < t.length) {
+    const c = t[i];
+    if (inQuotes) {
+      if (c === '"') { if (t[i + 1] === '"') { field += '"'; i++; } else { inQuotes = false; } }
+      else { field += c; }
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ',') { row.push(field); field = ''; }
+      else if (c === '\n') { row.push(field); lines.push(row); row = []; field = ''; }
+      else { field += c; }
+    }
+    i++;
+  }
+  if (field.length || row.length) { row.push(field); lines.push(row); }
+  if (!lines.length) return [];
+  const header = lines[0].map(h => h.trim().toLowerCase());
+  const idx = { en: header.indexOf('en'), th: header.indexOf('th'), pos: header.indexOf('pos'), example: header.indexOf('example') };
+  if (idx.en === -1 || idx.th === -1) return [];
+  return lines.slice(1).map(cols => ({
+    en: (cols[idx.en] ?? '').trim(),
+    th: (cols[idx.th] ?? '').trim(),
+    pos: (idx.pos !== -1 ? cols[idx.pos] : 'noun')?.trim() || 'noun',
+    example: (idx.example !== -1 ? cols[idx.example] : '')?.trim() || ''
+  })).filter(r => r.en && r.th);
+}
+
+/* =============================================
+   SRS: SM-2 EF + user-defined early intervals
+============================================= */
 const initCardProgress = (deck) => Object.fromEntries(
   deck.map((c) => [c.id, {
-    ef: 2.5, interval: 0, due: todayKey(),
-    correct: 0, wrong: 0, reps: 0,
-    introduced: false, introducedOn: null
+    ef: 2.5,
+    interval: 0,
+    due: todayKey(),
+    correct: 0,
+    wrong: 0,
+    reps: 0,
+    introduced: false,
+    introducedOn: null,
   }])
 );
 
+// quality: 2 (hard), 4 (good), 5 (easy/perfect)
 function scheduleNext(progress, quality, intervals) {
   let { ef, interval, reps = 0 } = progress;
+
+  // EF update per SM-2
   ef = Math.max(1.3, ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)));
-  if (quality < 3) { interval = Math.max(1, Number(intervals?.hard ?? 1)); reps = 0; }
-  else if (reps === 0) { interval = Math.max(1, Number(intervals?.good ?? 2)); reps = 1; }
-  else if (reps === 1) { interval = Math.max(interval, Number(intervals?.easy ?? 3)); reps = 2; }
-  else { const qMul = quality >= 5 ? 1.25 : 1.0; interval = Math.max(1, Math.round(interval * ef * qMul)); reps += 1; }
-  const nextDate = new Date(); nextDate.setDate(nextDate.getDate() + interval);
+
+  if (quality < 3) { // failure → relearn
+    interval = Math.max(1, Number(intervals?.hard ?? 1));
+    reps = 0;
+  } else if (reps === 0) { // first success
+    interval = Math.max(1, Number(intervals?.good ?? 2));
+    reps = 1;
+  } else if (reps === 1) { // second success
+    interval = Math.max(interval, Number(intervals?.easy ?? 3));
+    reps = 2;
+  } else { // later → grow multiplicatively
+    const qMul = quality >= 5 ? 1.25 : 1.0;
+    interval = Math.max(1, Math.round(interval * ef * qMul));
+    reps += 1;
+  }
+
+  const nextDate = new Date();
+  nextDate.setDate(nextDate.getDate() + interval);
   return { ef, interval, due: localDateKey(nextDate), reps };
 }
 
-/* ========= App ========= */
+/* =============================================
+   App
+============================================= */
 export default function App() {
   const [store, setStore] = usePersistentState({
     theme: "dark",
@@ -81,10 +161,10 @@ export default function App() {
     calendar: {},
     quizHistory: [],
     intervals: { easy: 3, good: 2, hard: 1 },
-    dailyNew: 10,
+    dailyNew: 10, // introduce up to N new words each day
   });
 
-  // patch
+  // Patch older saves
   useEffect(() => {
     setStore((s) => {
       const patched = { ...s };
@@ -107,34 +187,42 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // streak
+  // Streak tracking
   useEffect(() => {
     const today = todayKey();
     if (store.lastActive === today) return;
     if (!store.lastActive) { setStore((s) => ({ ...s, lastActive: today })); return; }
-    const last = dateFromKey(store.lastActive), now = dateFromKey(today);
-    const diff = Math.round((now - last) / (1000 * 60 * 60 * 24));
+    const lastD = dateFromKey(store.lastActive), now = dateFromKey(today);
+    const diff = Math.round((now - lastD) / (1000 * 60 * 60 * 24));
     setStore((s) => ({ ...s, lastActive: today, streak: diff === 1 ? s.streak + 1 : diff === 0 ? s.streak : 1 }));
-  }, []); // mount
+  }, []); // mount only
 
-  // theme
+  // Theme toggle
   useEffect(() => {
     const root = document.documentElement;
     if (store.theme === "dark") root.classList.add("dark"); else root.classList.remove("dark");
   }, [store.theme]);
 
-  // daily introduce
+  // Daily introduction of new words
   useEffect(() => {
     const today = todayKey();
     const introducedToday = Object.values(store.cards || {}).filter(c => c.introducedOn === today).length;
     const need = Math.max(0, (store.dailyNew ?? 0) - introducedToday);
+
     if (need > 0) {
       const nextCards = { ...store.cards };
       const candidates = store.deck.filter(c => !nextCards[c.id]?.introduced).slice(0, need);
       if (candidates.length) {
         candidates.forEach((c) => {
           const prev = nextCards[c.id] ?? { ef: 2.5, interval: 0, reps: 0, correct: 0, wrong: 0 };
-          nextCards[c.id] = { ...prev, introduced: true, introducedOn: today, due: today, interval: 0, reps: 0 };
+          nextCards[c.id] = {
+            ...prev,
+            introduced: true,
+            introducedOn: today,
+            due: today,
+            interval: 0,
+            reps: 0,
+          };
         });
         setStore((s) => ({ ...s, cards: nextCards }));
       }
@@ -145,10 +233,14 @@ export default function App() {
   const [tab, setTab] = useState("home");
   const todayXP = store.calendar[todayKey()] ?? 0;
   const goalPct = Math.min(100, Math.round((todayXP / store.goal) * 100));
-  const addXP = (points) => {
+  function addXP(points) {
     const day = todayKey();
-    setStore((s) => ({ ...s, xp: s.xp + points, calendar: { ...s.calendar, [day]: (s.calendar[day] ?? 0) + points } }));
-  };
+    setStore((s) => ({
+      ...s,
+      xp: s.xp + points,
+      calendar: { ...s.calendar, [day]: (s.calendar[day] ?? 0) + points }
+    }));
+  }
 
   return (
     <div className="min-h-[100dvh] bg-gradient-to-br from-indigo-950 via-slate-900 to-emerald-900 dark:from-slate-950 dark:via-zinc-950 dark:to-slate-900 text-slate-100">
@@ -165,33 +257,35 @@ export default function App() {
               <ProgressSection store={store} />
             </motion.div>
           )}
-
           {tab === "flashcards" && (
             <motion.div key="flash" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
               <Flashcards store={store} setStore={setStore} onXP={addXP} />
             </motion.div>
           )}
-
           {tab === "quiz" && (
             <motion.div key="quiz" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-              <Suspense fallback={<Card><div className="p-6">Loading quiz…</div></Card>}>
+              <Suspense fallback={<Card><div className="py-6 text-center">Loading quiz…</div></Card>}>
                 <Quiz store={store} setStore={setStore} onXP={addXP} />
               </Suspense>
             </motion.div>
           )}
-
           {tab === "listen" && (
             <motion.div key="listen" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-              <Suspense fallback={<Card><div className="p-6">Loading listening lab…</div></Card>}>
-                <ListeningLab store={store} onXP={addXP} speak={speak} />
+              <Suspense fallback={<Card><div className="py-6 text-center">Loading listening lab…</div></Card>}>
+                <ListeningLab store={store} onXP={addXP} />
               </Suspense>
             </motion.div>
           )}
-
           {tab === "settings" && (
             <motion.div key="settings" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-              <Suspense fallback={<Card><div className="p-6">Loading settings…</div></Card>}>
-                <Settings store={store} setStore={setStore} scheduleNext={scheduleNext} todayKey={todayKey} />
+              <Suspense fallback={<Card><div className="py-6 text-center">Loading settings…</div></Card>}>
+                <Settings
+                  store={store}
+                  setStore={setStore}
+                  todayKey={todayKey}
+                  scheduleNext={scheduleNext}
+                  parseCSV={parseCSV}
+                />
               </Suspense>
             </motion.div>
           )}
@@ -203,7 +297,9 @@ export default function App() {
   );
 }
 
-/* ========= UI bits (unchanged) ========= */
+/* =============================================
+   UI Bits
+============================================= */
 function Decor() {
   return (
     <div aria-hidden className="pointer-events-none fixed inset-0 overflow-hidden">
@@ -213,9 +309,13 @@ function Decor() {
     </div>
   );
 }
+
 function TopBar({ store, setStore, goalPct }) {
   return (
-    <header className="sticky top-0 z-40 backdrop-blur bg-black/30 border-b border-white/10">
+    <header
+      className="sticky top-0 z-40 backdrop-blur bg-black/30 border-b border-white/10"
+      style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }} // keep below iOS notch
+    >
       <div className="max-w-6xl mx-auto flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-2">
           <Sparkles className="size-6 text-amber-300" />
@@ -227,8 +327,9 @@ function TopBar({ store, setStore, goalPct }) {
             <Flame className="size-4 text-orange-400" />
             <span>Streak: <b>{store.streak}</b> days</span>
           </div>
+          {/* hide on mobile; theme toggle is available in Settings */}
           <button
-            className="inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm"
+            className="hidden md:inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm"
             onClick={() => setStore((s) => ({ ...s, theme: s.theme === "dark" ? "light" : "dark" }))}
           >
             {store.theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />} Theme
@@ -238,6 +339,7 @@ function TopBar({ store, setStore, goalPct }) {
     </header>
   );
 }
+
 function GoalRing({ pct }) {
   const r = 16; const c = 2 * Math.PI * r; const off = c - (c * pct) / 100;
   return (
@@ -248,6 +350,7 @@ function GoalRing({ pct }) {
     </svg>
   );
 }
+
 function Nav({ tab, setTab }) {
   const items = [
     { id: "home", label: "Home", icon: Home },
@@ -276,6 +379,7 @@ function Nav({ tab, setTab }) {
     </nav>
   );
 }
+
 function BottomTabBar({ tab, setTab }) {
   const items = [
     { id: "home", label: "Home", icon: Home },
@@ -296,7 +400,10 @@ function BottomTabBar({ tab, setTab }) {
             <button
               key={it.id}
               onClick={() => setTab(it.id)}
-              className={classNames("flex flex-col items-center justify-center py-2 min-h-16 gap-1", Active ? "text-emerald-400" : "text-slate-200")}
+              className={classNames(
+                "flex flex-col items-center justify-center py-2 min-h-16 gap-1",
+                Active ? "text-emerald-400" : "text-slate-200"
+              )}
             >
               <it.icon className="size-5" />
               <span className="text-[11px] leading-none">{it.label}</span>
@@ -307,6 +414,7 @@ function BottomTabBar({ tab, setTab }) {
     </nav>
   );
 }
+
 function Hero() {
   return (
     <section className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-emerald-700/40 to-cyan-700/40 border border-white/10 p-6 sm:p-10">
@@ -325,6 +433,7 @@ function Hero() {
     </section>
   );
 }
+
 function Badge({ icon: Icon, text }) {
   return (
     <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs">
@@ -332,6 +441,7 @@ function Badge({ icon: Icon, text }) {
     </div>
   );
 }
+
 function Stats({ store, goalPct }) {
   const today = todayKey();
   const todayXP = store.calendar[today] ?? 0;
@@ -340,6 +450,7 @@ function Stats({ store, goalPct }) {
     for (let i = 6; i >= 0; i--) { const d = new Date(); d.setDate(d.getDate() - i); const k = localDateKey(d); arr.push({ day: k.slice(5), xp: store.calendar[k] ?? 0 }); }
     return arr;
   }, [store.calendar]);
+
   return (
     <section className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
       <Card>
@@ -377,7 +488,9 @@ function Stats({ store, goalPct }) {
     </section>
   );
 }
+
 function Card({ children }) { return (<div className="rounded-3xl border border-white/10 bg-white/5 p-4">{children}</div>); }
+
 function QuickStart({ setTab }) {
   return (
     <section className="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -387,6 +500,7 @@ function QuickStart({ setTab }) {
     </section>
   );
 }
+
 function QSItem({ icon: Icon, title, desc, onClick }) {
   return (
     <button onClick={onClick} className="group rounded-3xl border border-white/10 bg-gradient-to-br from-white/5 to-white/[.02] p-5 text-left hover:border-emerald-400 transition">
@@ -400,6 +514,7 @@ function QSItem({ icon: Icon, title, desc, onClick }) {
     </button>
   );
 }
+
 function Flashcards({ store, setStore, onXP }) {
   const dueCards = useMemo(() =>
     store.deck.filter((c) => {
@@ -428,7 +543,6 @@ function Flashcards({ store, setStore, onXP }) {
     );
   }
 
-  function speakWord() { try { speak(card.en, "en-US"); } catch {} }
   function grade(quality) {
     const prog = store.cards[card.id];
     const next = scheduleNext(prog, quality, store.intervals);
@@ -447,11 +561,12 @@ function Flashcards({ store, setStore, onXP }) {
           <div className="text-sm text-slate-400">{card.pos}</div>
           {!show && (
             <div className="mt-6">
-              <button onClick={speakWord} className="inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm">
+              <button onClick={() => speak(card.en, "en-US")} className="inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm">
                 <Volume2 className="size-4" /> Listen (EN)
               </button>
             </div>
           )}
+
           <AnimatePresence>
             {show && (
               <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-6">
@@ -460,16 +575,25 @@ function Flashcards({ store, setStore, onXP }) {
               </motion.div>
             )}
           </AnimatePresence>
-          <div className="mt-auto pt-6 flex flex-wrap gap-2">
-            <button onClick={() => setShow(true)} className="rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-2">Show translation</button>
-            <div className="ml-auto flex gap-2">
-              <button onClick={() => grade(2)} className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-2">Hard</button>
-              <button onClick={() => grade(4)} className="rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-2">Good</button>
-              <button onClick={() => grade(5)} className="rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-2">Easy</button>
+
+          {/* Mobile-safe action layout */}
+          <div className="mt-auto pt-6 sm:flex sm:items-center sm:gap-2">
+            <button
+              onClick={() => setShow(true)}
+              className="rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-3 w-full sm:w-auto"
+            >
+              Show translation
+            </button>
+
+            <div className="mt-3 sm:mt-0 sm:ml-auto grid grid-cols-3 gap-2 w-full sm:w-auto">
+              <button onClick={() => grade(2)} className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3">Hard</button>
+              <button onClick={() => grade(4)} className="rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-3">Good</button>
+              <button onClick={() => grade(5)} className="rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-3">Easy</button>
             </div>
           </div>
         </div>
       </div>
+
       <div>
         <Card>
           <div className="text-sm text-slate-400">This word</div>
@@ -492,6 +616,7 @@ function Flashcards({ store, setStore, onXP }) {
     </section>
   );
 }
+
 function ProgressSection({ store }) {
   const days = Object.keys(store.calendar).sort();
   const totalXP = days.reduce((sum, k) => sum + (store.calendar[k] || 0), 0);
@@ -508,6 +633,7 @@ function ProgressSection({ store }) {
     </section>
   );
 }
+
 function Footer() {
   return (
     <footer className="hidden md:block fixed bottom-0 left-0 right-0 border-t border-white/10 bg-black/30 backdrop-blur">
