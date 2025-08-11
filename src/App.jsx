@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState, Suspense } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   BookOpen,
@@ -16,19 +16,22 @@ import {
   Sun,
   Trophy,
   Volume2,
+  Mic,
+  Square,
+  Play,
+  Search,
+  UploadCloud,
+  RefreshCw,
+  AlertTriangle,
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
 
-// Lazy tabs
-const Quiz = React.lazy(() => import("./tabs/Quiz.jsx"));
-const ListeningLab = React.lazy(() => import("./tabs/ListeningLab.jsx"));
-const Settings = React.lazy(() => import("./tabs/Settings.jsx"));
-
 /* =============================================
-   Helpers
+   Small helpers
 ============================================= */
 const last = (arr) => (Array.isArray(arr) && arr.length ? arr[arr.length - 1] : undefined);
 const classNames = (...a) => a.filter(Boolean).join(" ");
+const clamp = (n, min, max) => Math.max(min, Math.min(n, max));
 
 /* =============================================
    Data & Utilities
@@ -64,12 +67,50 @@ function usePersistentState(defaults) {
   return [state, setState];
 }
 
-function speak(text, lang = "en-US") {
+/* TTS with user-selected voice/rate/pitch/volume */
+function pickPreferredVoice(voices, prefName) {
+  if (!voices || !voices.length) return null;
+  if (prefName) {
+    const byName = voices.find(v => v.name === prefName);
+    if (byName) return byName;
+  }
+  // Try some commonly clear voices
+  const prefers = [
+    "Google US English", "Microsoft Aria Online (Natural) - English (United States)",
+    "Samantha", "Karen", "Daniel", "Google UK English Male", "Google UK English Female",
+  ];
+  for (const want of prefers) {
+    const v = voices.find(v => v.name.includes(want));
+    if (v) return v;
+  }
+  // fallback first English voice
+  const en = voices.find(v => (v.lang || "").toLowerCase().startsWith("en"));
+  return en || voices[0];
+}
+function speak(text, opts = {}) {
+  if (!text) return;
   try {
+    const synth = window.speechSynthesis;
     const u = new SpeechSynthesisUtterance(text);
+    const { lang = "en-US", voiceName, rate = 1.0, pitch = 1.0, volume = 1.0 } = opts || {};
     u.lang = lang;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(u);
+    u.rate = clamp(rate, 0.5, 2);
+    u.pitch = clamp(pitch, 0, 2);
+    u.volume = clamp(volume, 0, 1);
+    const trySpeak = () => {
+      const voices = synth.getVoices();
+      const picked = pickPreferredVoice(voices, voiceName);
+      if (picked) u.voice = picked;
+      synth.cancel();
+      synth.speak(u);
+    };
+    if (!synth.getVoices().length) {
+      synth.onvoiceschanged = () => trySpeak();
+      // Safari sometimes needs a kick:
+      setTimeout(() => trySpeak(), 50);
+    } else {
+      trySpeak();
+    }
   } catch {}
 }
 
@@ -136,7 +177,7 @@ function scheduleNext(progress, quality, intervals) {
     interval = Math.max(interval, Number(intervals?.easy ?? 3));
     reps = 2;
   } else { // later → grow multiplicatively
-    const qMul = quality >= 5 ? 1.25 : 1.0;
+    const qMul = quality >= 5 ? 1.25 : 1.0; // reward perfect recall
     interval = Math.max(1, Math.round(interval * ef * qMul));
     reps += 1;
   }
@@ -162,6 +203,7 @@ export default function App() {
     quizHistory: [],
     intervals: { easy: 3, good: 2, hard: 1 },
     dailyNew: 10, // introduce up to N new words each day
+    tts: { rate: 1.0, pitch: 1.0, volume: 1.0, voiceName: "" },
   });
 
   // Patch older saves
@@ -170,6 +212,7 @@ export default function App() {
       const patched = { ...s };
       if (!patched.intervals) patched.intervals = { easy: 3, good: 2, hard: 1 };
       if (typeof patched.dailyNew !== "number") patched.dailyNew = 10;
+      if (!patched.tts) patched.tts = { rate: 1.0, pitch: 1.0, volume: 1.0, voiceName: "" };
       const cards = { ...(patched.cards || {}) };
       Object.keys(cards || {}).forEach((id) => {
         const c = cards[id] || {};
@@ -259,34 +302,22 @@ export default function App() {
           )}
           {tab === "flashcards" && (
             <motion.div key="flash" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-              <Flashcards store={store} setStore={setStore} onXP={addXP} />
+              <Flashcards store={store} setStore={setStore} onXP={addXP} tts={store.tts} />
             </motion.div>
           )}
           {tab === "quiz" && (
             <motion.div key="quiz" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-              <Suspense fallback={<Card><div className="py-6 text-center">Loading quiz…</div></Card>}>
-                <Quiz store={store} setStore={setStore} onXP={addXP} />
-              </Suspense>
+              <Quiz store={store} setStore={setStore} onXP={addXP} />
             </motion.div>
           )}
           {tab === "listen" && (
             <motion.div key="listen" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-              <Suspense fallback={<Card><div className="py-6 text-center">Loading listening lab…</div></Card>}>
-                <ListeningLab store={store} onXP={addXP} />
-              </Suspense>
+              <ListeningLab store={store} onXP={addXP} />
             </motion.div>
           )}
           {tab === "settings" && (
             <motion.div key="settings" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-              <Suspense fallback={<Card><div className="py-6 text-center">Loading settings…</div></Card>}>
-                <Settings
-                  store={store}
-                  setStore={setStore}
-                  todayKey={todayKey}
-                  scheduleNext={scheduleNext}
-                  parseCSV={parseCSV}
-                />
-              </Suspense>
+              <Settings store={store} setStore={setStore} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -312,11 +343,14 @@ function Decor() {
 
 function TopBar({ store, setStore, goalPct }) {
   return (
-    <header
-      className="sticky top-0 z-40 backdrop-blur bg-black/30 border-b border-white/10"
-      style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }} // keep below iOS notch
-    >
-      <div className="max-w-6xl mx-auto flex items-center justify-between px-4 py-3">
+    <header className="sticky top-0 z-40 backdrop-blur bg-black/30 border-b border-white/10 pt-[env(safe-area-inset-top)]">
+      <div
+        className="max-w-6xl mx-auto flex items-center justify-between px-4 py-3"
+        style={{
+          paddingLeft: "max(1rem, env(safe-area-inset-left))",
+          paddingRight: "max(1rem, env(safe-area-inset-right))",
+        }}
+      >
         <div className="flex items-center gap-2">
           <Sparkles className="size-6 text-amber-300" />
           <span className="font-semibold tracking-wide">EN Trainer</span>
@@ -327,9 +361,8 @@ function TopBar({ store, setStore, goalPct }) {
             <Flame className="size-4 text-orange-400" />
             <span>Streak: <b>{store.streak}</b> days</span>
           </div>
-          {/* hide on mobile; theme toggle is available in Settings */}
           <button
-            className="hidden md:inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm"
+            className="inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm"
             onClick={() => setStore((s) => ({ ...s, theme: s.theme === "dark" ? "light" : "dark" }))}
           >
             {store.theme === "dark" ? <Sun className="size-4" /> : <Moon className="size-4" />} Theme
@@ -515,8 +548,11 @@ function QSItem({ icon: Icon, title, desc, onClick }) {
   );
 }
 
-function Flashcards({ store, setStore, onXP }) {
-  // Only cards that are introduced and due
+/* =============================================
+   Flashcards (fixed)
+============================================= */
+function Flashcards({ store, setStore, onXP, tts }) {
+  // Cards that are introduced and currently due
   const dueCards = useMemo(
     () =>
       store.deck.filter((c) => {
@@ -529,15 +565,12 @@ function Flashcards({ store, setStore, onXP }) {
   const [idx, setIdx] = useState(0);
   const [show, setShow] = useState(false);
 
-  // When the number of due cards changes, keep index valid
+  // keep index in range if list changes
   useEffect(() => {
-    if (idx >= dueCards.length && dueCards.length > 0) setIdx(0);
+    if (dueCards.length === 0) { setIdx(0); setShow(false); return; }
+    if (idx >= dueCards.length) { setIdx(Math.max(0, dueCards.length - 1)); setShow(false); }
   }, [dueCards.length, idx]);
 
-  // Reset “show translation” when card changes
-  useEffect(() => { setShow(false); }, [idx]);
-
-  // If nothing due, show the "all caught up" card
   if (!dueCards.length) {
     return (
       <Card>
@@ -552,51 +585,44 @@ function Flashcards({ store, setStore, onXP }) {
     );
   }
 
-  // Safe to read current card now
   const card = dueCards[idx];
+  const remainingAfterThis = Math.max(0, dueCards.length - 1);
+
+  useEffect(() => { setShow(false); }, [idx, card?.id]);
 
   function grade(quality) {
-    // Defensive read in case something changes between click & render
     if (!card) return;
-
-    const prog = store.cards[card.id] ?? {
-      ef: 2.5, interval: 0, reps: 0, correct: 0, wrong: 0, introduced: true, introducedOn: todayKey(), due: todayKey()
+    const prog = store.cards[card.id] || {
+      ef: 2.5, interval: 0, reps: 0, correct: 0, wrong: 0,
+      introduced: true, introducedOn: todayKey(), due: todayKey(),
     };
-
     const next = scheduleNext(prog, quality, store.intervals);
     const updated = {
-      ...prog,
-      ...next,
+      ...prog, ...next,
       correct: prog.correct + (quality >= 3 ? 1 : 0),
       wrong: prog.wrong + (quality < 3 ? 1 : 0),
     };
-
     setStore((s) => ({ ...s, cards: { ...s.cards, [card.id]: updated } }));
     onXP(quality >= 3 ? 10 : 4);
-
-    // Decide next index based on the OLD list length; a clamp effect above will
-    // keep it valid after the list shrinks.
-    setIdx((i) => (i < dueCards.length - 1 ? i + 1 : 0));
+    setIdx((i) => i + 1);
   }
-
-  const remainingAfterThis = Math.max(0, dueCards.length - 1);
 
   return (
     <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2">
         <div className="rounded-3xl border border-white/10 bg-white/5 p-6 min-h-[60dvh] sm:min-h-[320px] flex flex-col">
-          <div className="text-sm text-slate-300 flex items-center justify-between">
-            <span>Card {idx + 1}/{dueCards.length}</span>
-            <span className="text-slate-400">Remaining today: <b>{remainingAfterThis}</b></span>
+          <div className="flex items-center justify-between text-sm text-slate-300">
+            <span>Card {Math.min(idx + 1, dueCards.length)}/{dueCards.length}</span>
+            <span>Remaining today: <b>{remainingAfterThis}</b></span>
           </div>
 
-          <div className="mt-2 text-4xl font-extrabold tracking-tight">{card.en}</div>
+          <div className="mt-2 text-4xl font-extrabold tracking-tight break-words">{card.en}</div>
           <div className="text-sm text-slate-400">{card.pos}</div>
 
           {!show && (
             <div className="mt-6">
               <button
-                onClick={() => speak(card.en, "en-US")}
+                onClick={() => speak(card.en, { lang: "en-US", ...tts })}
                 className="inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm"
               >
                 <Volume2 className="size-4" /> Listen (EN)
@@ -606,30 +632,24 @@ function Flashcards({ store, setStore, onXP }) {
 
           <AnimatePresence>
             {show && (
-              <motion.div
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="mt-6"
-              >
+              <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-6">
                 <div className="text-xl">{card.th}</div>
-                <div className="text-sm text-slate-300 mt-2">Example: <i>{card.example}</i></div>
+                {card.example ? (
+                  <div className="text-sm text-slate-300 mt-2">Example: <i>{card.example}</i></div>
+                ) : null}
               </motion.div>
             )}
           </AnimatePresence>
 
-          <div className="mt-auto pt-6 flex flex-wrap gap-2">
-            <button
-              onClick={() => setShow(true)}
-              className="rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-2"
-            >
+          <div className="mt-auto pt-6 space-y-3">
+            <button onClick={() => setShow(true)} className="w-full rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-3">
               Show translation
             </button>
 
-            <div className="ml-auto flex gap-2">
-              <button onClick={() => grade(2)} className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-2">Hard</button>
-              <button onClick={() => grade(4)} className="rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-2">Good</button>
-              <button onClick={() => grade(5)} className="rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-2">Easy</button>
+            <div className="grid grid-cols-3 gap-2">
+              <button onClick={() => grade(2)} className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3">Hard</button>
+              <button onClick={() => grade(4)} className="rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-3">Good</button>
+              <button onClick={() => grade(5)} className="rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-3">Easy</button>
             </div>
           </div>
         </div>
@@ -658,6 +678,9 @@ function Flashcards({ store, setStore, onXP }) {
   );
 }
 
+/* =============================================
+   Progress
+============================================= */
 function ProgressSection({ store }) {
   const days = Object.keys(store.calendar).sort();
   const totalXP = days.reduce((sum, k) => sum + (store.calendar[k] || 0), 0);
@@ -675,6 +698,785 @@ function ProgressSection({ store }) {
   );
 }
 
+/* =============================================
+   Quiz
+============================================= */
+function Quiz({ store, setStore, onXP }) {
+  const [mode, setMode] = useState("mc"); // mc | type
+  const [dir, setDir] = useState("en-th"); // en-th | th-en
+  const [count, setCount] = useState(10);
+  const [started, setStarted] = useState(false);
+  const [qIndex, setQIndex] = useState(0);
+  const [score, setScore] = useState(0);
+  const [done, setDone] = useState(false);
+  const [questions, setQuestions] = useState([]);
+  const canStart = store.deck.length >= Math.min(4, count);
+
+  function shuffle(arr){ return [...arr].sort(() => Math.random() - 0.5); }
+  function pickN(arr,n){ return shuffle(arr).slice(0, n); }
+
+  function buildQuestions() {
+    const base = pickN(store.deck, Math.min(count, store.deck.length));
+    const qs = base.map((item) => {
+      const prompt = dir === "en-th" ? item.en : item.th;
+      const answer = dir === "en-th" ? item.th : item.en;
+      if (mode === "mc") {
+        const pool = store.deck.filter((d) => d.id !== item.id).map((d) => dir === "en-th" ? d.th : d.en);
+        const distractors = pickN(pool, 3);
+        const options = shuffle([answer, ...distractors]);
+        return { type: "mc", prompt, answer, options, item };
+      }
+      return { type: "type", prompt, answer, item };
+    });
+    setQuestions(qs);
+  }
+
+  function start() {
+    buildQuestions();
+    setScore(0); setQIndex(0); setDone(false); setStarted(true);
+  }
+
+  function submitMC(opt){
+    const q = questions[qIndex];
+    const correct = opt === q.answer;
+    if (correct) { setScore((s)=>s+1); onXP(6); } else { onXP(2); }
+    next();
+  }
+
+  function submitType(e){
+    e.preventDefault();
+    const form = new FormData(e.currentTarget);
+    const val = String(form.get("ans") || "").trim().toLowerCase();
+    const q = questions[qIndex];
+    const correct = val === String(q.answer).trim().toLowerCase();
+    if (correct) { setScore((s)=>s+1); onXP(8); } else { onXP(2); }
+    e.currentTarget.reset();
+    next();
+  }
+
+  function next(){
+    if (qIndex + 1 >= questions.length){
+      setDone(true); setStarted(false);
+      const total = questions.length; const correct = score + 0;
+      const accuracy = total ? Math.round((correct / total) * 100) : 0;
+      const entry = { date: new Date().toISOString(), mode, dir, total, correct, accuracy };
+      setStore((s)=> ({ ...s, quizHistory: [...(s.quizHistory||[]), entry] }));
+      return;
+    }
+    setQIndex((i)=> i+1);
+  }
+
+  if (!started && !done) {
+    return (
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <div className="font-semibold">Quiz</div>
+          <div className="text-xs text-slate-400">Choose mode and start</div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div>
+            <div className="text-sm mb-1">Mode</div>
+            <div className="flex gap-2">
+              <button className={classNames("px-3 py-2 rounded", mode==="mc"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")} onClick={()=>setMode("mc")}>Multiple choice</button>
+              <button className={classNames("px-3 py-2 rounded", mode==="type"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")} onClick={()=>setMode("type")}>Type answer</button>
+            </div>
+          </div>
+          <div>
+            <div className="text-sm mb-1">Direction</div>
+            <div className="flex gap-2">
+              <button className={classNames("px-3 py-2 rounded", dir==="en-th"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")} onClick={()=>setDir("en-th")}>EN → TH</button>
+              <button className={classNames("px-3 py-2 rounded", dir==="th-en"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")} onClick={()=>setDir("th-en")}>TH → EN</button>
+            </div>
+          </div>
+          <div>
+            <div className="text-sm mb-1">Number of questions</div>
+            <input
+              type="number" min={5} max={50} step={5} value={count}
+              onChange={(e)=>setCount(Number(e.target.value))}
+              className="w-full rounded p-2 bg-white text-black placeholder-slate-500"
+            />
+          </div>
+        </div>
+        <div className="mt-4 flex items-center gap-3">
+          <button
+            disabled={!canStart}
+            onClick={start}
+            className={classNames("px-4 py-2 rounded", canStart?"bg-emerald-500 hover:bg-emerald-600":"bg-white/10 cursor-not-allowed")}
+          >
+            Start
+          </button>
+          {!canStart && <span className="text-xs text-rose-300">Need at least 4 words</span>}
+        </div>
+        {!!store.quizHistory?.length && (
+          <div className="mt-6">
+            <div className="text-sm text-slate-400 mb-2">Recent quiz history</div>
+            <ul className="space-y-1 text-sm">
+              {store.quizHistory.slice(-5).reverse().map((h, i)=>(
+                <li key={i} className="flex justify-between bg-white/5 rounded px-3 py-2">
+                  <span>{new Date(h.date).toLocaleString()} · {h.mode} · {h.dir}</span>
+                  <span>{h.correct}/{h.total} ({h.accuracy}%)</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </Card>
+    );
+  }
+
+  if (started) {
+    const q = questions[qIndex];
+    return (
+      <Card>
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-sm text-slate-400">Question {qIndex+1}/{questions.length}</div>
+          <div className="text-sm">Score: <b>{score}</b></div>
+        </div>
+        <div className="text-xl font-bold mb-3">{q.prompt}</div>
+        <div className="mb-4">
+          <button onClick={()=> speak(dir==="en-th" ? q.item.en : q.item.th, { lang: dir==="en-th"?"en-US":"th-TH" })} className="inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm"><Volume2 className="size-4"/> Listen</button>
+        </div>
+        {q.type === "mc" ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {q.options.map((opt, i)=>(
+              <button key={i} onClick={()=>submitMC(opt)} className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3 text-left">{opt}</button>
+            ))}
+          </div>
+        ) : (
+          <form onSubmit={submitType} className="flex gap-2">
+            <input
+              name="ans" autoFocus
+              className="flex-1 rounded p-2 bg-white text-black placeholder-slate-500"
+              placeholder="Type your answer"
+            />
+            <button type="submit" className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Submit</button>
+          </form>
+        )}
+      </Card>
+    );
+  }
+
+  // done
+  const lastHist = last(store.quizHistory);
+  return (
+    <Card>
+      <div className="text-lg font-bold mb-2">Summary</div>
+      {lastHist ? (
+        <div className="mb-2 text-sm text-slate-300">{new Date(lastHist.date).toLocaleString()} · {lastHist.mode} · {lastHist.dir}</div>
+      ) : null}
+      <div className="text-2xl font-bold mb-3">Score: {score}/{questions.length}</div>
+      <div className="flex gap-2">
+        <button onClick={()=>{ setDone(false); setStarted(false); }} className="rounded bg-white/10 px-4 py-2 hover:bg-white/20">Change options</button>
+        <button onClick={start} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Restart</button>
+      </div>
+    </Card>
+  );
+}
+
+/* =============================================
+   Listening Lab (TTS + Mic + optional STT)
+============================================= */
+function ListeningLab({ store, onXP }) {
+  const [source, setSource] = useState("deck");
+  const firstId = store.deck[0]?.id ?? null;
+  const [selectedId, setSelectedId] = useState(firstId);
+  const [customText, setCustomText] = useState("");
+  const [recognized, setRecognized] = useState("");
+  const [scorePct, setScorePct] = useState(null);
+  const audioRef = useRef(null);
+
+  const [recording, setRecording] = useState(false);
+  const recorderRef = useRef(null);
+  const chunksRef = useRef([]);
+  const [audioURL, setAudioURL] = useState(null);
+
+  const Recognition =
+    typeof window !== "undefined"
+      ? window.SpeechRecognition || window.webkitSpeechRecognition
+      : null;
+  const supportsSTT = !!Recognition;
+
+  const expected = useMemo(() => {
+    if (source === "custom") return customText.trim();
+    const card = store.deck.find((d) => d.id === selectedId);
+    return card?.en ?? "";
+  }, [source, customText, store.deck, selectedId]);
+
+  function normalize(s) {
+    return s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+  }
+  function levenshtein(a, b) {
+    const m = a.length, n = b.length;
+    const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
+    for (let i = 0; i <= m; i++) dp[i][0] = i;
+    for (let j = 0; j <= n; j++) dp[0][j] = j;
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+      }
+    }
+    return dp[m][n];
+  }
+  function scoreInput(input) {
+    const A = normalize(expected);
+    const B = normalize(input || "");
+    if (!A || !B) { setScorePct(null); return; }
+    const dist = levenshtein(A, B);
+    const denom = Math.max(A.length, B.length) || 1;
+    const pct = Math.max(0, Math.round((1 - dist / denom) * 100));
+    setScorePct(pct);
+    if (pct >= 85) onXP(12); else onXP(5);
+  }
+
+  async function startRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const rec = new MediaRecorder(stream);
+      recorderRef.current = rec;
+      chunksRef.current = [];
+      rec.ondataavailable = (e) => e.data && e.data.size && chunksRef.current.push(e.data);
+      rec.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        const url = URL.createObjectURL(blob);
+        setAudioURL(url);
+        stream.getTracks().forEach((t) => t.stop());
+      };
+      rec.start();
+      setRecording(true);
+    } catch (e) {
+      alert("Microphone not available.");
+    }
+  }
+  function stopRecording() {
+    try { recorderRef.current && recorderRef.current.stop(); } catch {}
+    setRecording(false);
+  }
+
+  function sttOnce() {
+    if (!supportsSTT) return;
+    const rec = new Recognition();
+    try { rec.lang = "en-US"; } catch {}
+    rec.interimResults = false;
+    try { rec.maxAlternatives = 1; } catch {}
+    rec.onresult = (ev) => {
+      const text = ev?.results?.[0]?.[0]?.transcript || "";
+      setRecognized(text);
+      scoreInput(text);
+    };
+    rec.onerror = () => {};
+    rec.start();
+  }
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-3">
+        <div className="font-semibold">Listening & Speaking Lab</div>
+        <div className="text-xs text-slate-400">TTS playback · mic recording · optional STT</div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2">
+          <div className="mb-2 text-sm">Source</div>
+          <div className="flex gap-2 mb-3">
+            <button
+              className={classNames("px-3 py-2 rounded", source==="deck"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}
+              onClick={()=>setSource("deck")}
+            >From deck</button>
+            <button
+              className={classNames("px-3 py-2 rounded", source==="custom"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}
+              onClick={()=>setSource("custom")}
+            >Custom</button>
+          </div>
+
+          {source === "deck" ? (
+            <div className="flex flex-col gap-2">
+              <label className="text-sm">Choose word</label>
+              <select
+                className="rounded p-2 bg-white text-black"
+                value={selectedId ?? ""}
+                onChange={(e)=>setSelectedId(Number(e.target.value))}
+              >
+                {store.deck.map((d)=>(
+                  <option key={d.id} value={d.id}>{d.en} — {d.th}</option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <label className="text-sm">Custom English text</label>
+              <textarea
+                className="rounded p-2 bg-white text-black placeholder-slate-500"
+                rows={3}
+                placeholder="Type a sentence to practice"
+                value={customText}
+                onChange={(e)=>setCustomText(e.target.value)}
+              />
+            </div>
+          )}
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button onClick={()=> speak(expected || "", { lang: "en-US", ...store.tts })} className="inline-flex items-center gap-2 rounded bg-white/10 px-3 py-2 hover:bg-white/20">
+              <Volume2 className="size-4" /> Play TTS
+            </button>
+
+            {!recording ? (
+              <button onClick={startRecording} className="inline-flex items-center gap-2 rounded bg-emerald-500/20 px-3 py-2 hover:bg-emerald-500/30">
+                <Mic className="size-4" /> Record
+              </button>
+            ) : (
+              <button onClick={stopRecording} className="inline-flex items-center gap-2 rounded bg-rose-500/20 px-3 py-2 hover:bg-rose-500/30">
+                <Square className="size-4" /> Stop
+              </button>
+            )}
+
+            <button
+              onClick={()=>{ if (audioRef.current && audioURL) { audioRef.current.currentTime = 0; audioRef.current.play(); } }}
+              disabled={!audioURL}
+              className={classNames("inline-flex items-center gap-2 rounded px-3 py-2", audioURL ? "bg-white/10 hover:bg-white/20" : "bg-white/5 cursor-not-allowed")}
+            >
+              <Play className="size-4" /> Playback
+            </button>
+
+            <button onClick={()=> sttOnce()} disabled={!supportsSTT} className={classNames("inline-flex items-center gap-2 rounded px-3 py-2", supportsSTT ? "bg-white/10 hover:bg-white/20" : "bg-white/5 cursor-not-allowed")}>
+              STT (English)
+            </button>
+          </div>
+
+          <audio ref={audioRef} src={audioURL ?? undefined} className="hidden" controls />
+
+          <div className="mt-4">
+            <div className="text-sm text-slate-400 mb-1">Recognized text (or type your attempt)</div>
+            <div className="flex gap-2">
+              <input
+                className="flex-1 rounded p-2 bg-white text-black placeholder-slate-500"
+                value={recognized}
+                onChange={(e)=>setRecognized(e.target.value)}
+                placeholder="If STT is unavailable, type what you heard"
+              />
+              <button onClick={()=> scoreInput(recognized)} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Check</button>
+            </div>
+            <div className="text-sm text-slate-300 mt-2">
+              Target: <i>{expected || "(empty)"}</i>
+            </div>
+            {scorePct !== null && (
+              <div className="mt-2 text-sm">
+                Similarity: <b>{scorePct}%</b> {scorePct >= 85 ? "✅ Great!" : "✨ Keep practicing"}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div>
+          <Card>
+            <div className="text-sm text-slate-400">Tips</div>
+            <ul className="mt-2 text-sm list-disc pl-5 space-y-1 text-slate-300">
+              <li>Use Settings → TTS to adjust voice, rate, and pitch for clarity.</li>
+              <li>Click <b>Play TTS</b> to hear the sentence.</li>
+              <li>Use <b>Record</b> to capture your voice, then <b>Playback</b>.</li>
+              <li>If your browser supports it, use <b>STT</b> to transcribe what you say.</li>
+            </ul>
+          </Card>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+/* =============================================
+   Settings (SRS & Goals + TTS + CSV Import + Manage Words)
+============================================= */
+function Settings({ store, setStore }) {
+  const [goal, setGoal] = useState(store.goal);
+  const [easyInt, setEasyInt] = useState(store.intervals?.easy ?? 3);
+  const [goodInt, setGoodInt] = useState(store.intervals?.good ?? 2);
+  const [hardInt, setHardInt] = useState(store.intervals?.hard ?? 1);
+  const [dailyNew, setDailyNew] = useState(store.dailyNew ?? 10);
+
+  // TTS settings
+  const [ttsRate, setTtsRate] = useState(store.tts?.rate ?? 1.0);
+  const [ttsPitch, setTtsPitch] = useState(store.tts?.pitch ?? 1.0);
+  const [ttsVolume, setTtsVolume] = useState(store.tts?.volume ?? 1.0);
+  const [voiceName, setVoiceName] = useState(store.tts?.voiceName ?? "");
+  const [availableVoices, setAvailableVoices] = useState([]);
+
+  useEffect(() => {
+    const synth = window.speechSynthesis;
+    const load = () => setAvailableVoices(synth.getVoices());
+    load();
+    synth.onvoiceschanged = load;
+  }, []);
+
+  function saveSettings() {
+    setStore((s) => ({
+      ...s,
+      goal: Number(goal),
+      intervals: { easy: Number(easyInt), good: Number(goodInt), hard: Number(hardInt) },
+      dailyNew: Number(dailyNew),
+      tts: { rate: Number(ttsRate), pitch: Number(ttsPitch), volume: Number(ttsVolume), voiceName },
+    }));
+  }
+
+  function rescheduleAll() {
+    const cards = { ...store.cards };
+    Object.keys(cards).forEach((id) => {
+      const c = cards[id];
+      if (!c.introduced) return;
+      const next = scheduleNext(c, 4, { easy: Number(easyInt), good: Number(goodInt), hard: Number(hardInt) });
+      cards[id] = { ...c, due: next.due, interval: next.interval, ef: next.ef, reps: Math.max(c.reps, next.reps) };
+    });
+    setStore((s) => ({ ...s, cards }));
+  }
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {/* SRS + Goals */}
+      <Card>
+        <div className="text-lg font-bold mb-4">SRS & Goals</div>
+
+        <label className="block text-sm mb-1">Daily XP goal</label>
+        <input
+          type="number" min={10} step={5} value={goal}
+          onChange={(e) => setGoal(e.target.value)}
+          className="mb-4 w-full rounded p-2 bg-white text-black placeholder-slate-500"
+        />
+
+        <div className="mb-4">
+          <div className="text-sm mb-1">Base review intervals (days)</div>
+          <div className="flex flex-wrap gap-3 mb-2">
+            <label className="flex items-center gap-2">Easy:
+              <input type="number" min={1} value={easyInt} onChange={(e) => setEasyInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
+            </label>
+            <label className="flex items-center gap-2">Good:
+              <input type="number" min={1} value={goodInt} onChange={(e) => setGoodInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
+            </label>
+            <label className="flex items-center gap-2">Hard:
+              <input type="number" min={1} value={hardInt} onChange={(e) => setHardInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
+            </label>
+          </div>
+          <div className="text-xs text-slate-300">Tip: Hard≈1, Good≈2, Easy≈3 for first rounds; EF expands spacing later.</div>
+        </div>
+
+        <div className="mb-4">
+          <div className="text-sm mb-1">Daily new words</div>
+          <input
+            type="number" min={0} value={dailyNew}
+            onChange={(e) => setDailyNew(e.target.value)}
+            className="w-32 rounded p-2 bg-white text-black"
+          />
+          <div className="text-xs text-slate-300 mt-1">Each day up to this many unintroduced words will enter the review queue.</div>
+        </div>
+
+        <div className="flex gap-2 mt-2">
+          <button onClick={saveSettings} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save</button>
+          <button onClick={rescheduleAll} className="rounded bg-white/10 border border-white/20 px-4 py-2 hover:bg-white/20">Recompute schedules</button>
+        </div>
+      </Card>
+
+      {/* TTS preferences */}
+      <Card>
+        <div className="text-lg font-bold mb-4">TTS Preferences</div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <label className="text-sm">
+            Voice
+            <select
+              className="mt-1 w-full rounded p-2 bg-white text-black"
+              value={voiceName}
+              onChange={(e)=> setVoiceName(e.target.value)}
+            >
+              <option value="">Auto (best English)</option>
+              {availableVoices.map(v => (
+                <option key={v.name} value={v.name}>{v.name} ({v.lang})</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm">
+            Rate
+            <input type="range" min="0.6" max="1.4" step="0.05" value={ttsRate} onChange={(e)=> setTtsRate(e.target.value)} className="w-full" />
+          </label>
+          <label className="text-sm">
+            Pitch
+            <input type="range" min="0.5" max="1.5" step="0.05" value={ttsPitch} onChange={(e)=> setTtsPitch(e.target.value)} className="w-full" />
+          </label>
+          <label className="text-sm">
+            Volume
+            <input type="range" min="0" max="1" step="0.05" value={ttsVolume} onChange={(e)=> setTtsVolume(e.target.value)} className="w-full" />
+          </label>
+        </div>
+
+        <div className="mt-3 flex gap-2">
+          <button onClick={()=> speak("This is a test of your speech settings.", { lang: "en-US", rate: Number(ttsRate), pitch: Number(ttsPitch), volume: Number(ttsVolume), voiceName })} className="rounded bg-white/10 px-3 py-2 hover:bg-white/20">
+            <Volume2 className="inline size-4 mr-2" /> Test voice
+          </button>
+          <button onClick={saveSettings} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save TTS</button>
+        </div>
+      </Card>
+
+      {/* CSV Import */}
+      <ImportCSV store={store} setStore={setStore} />
+
+      {/* Manage Words with search */}
+      <ManageWords store={store} setStore={setStore} />
+    </div>
+  );
+}
+
+/* =============================================
+   Import CSV with duplicate warning
+============================================= */
+function ImportCSV({ store, setStore }) {
+  const fileRef = useRef(null);
+  const [error, setError] = useState("");
+  const [pendingImport, setPendingImport] = useState(null); // { newRows, dupRows, byEN }
+
+  function onFile(e) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const text = String(reader.result || "");
+        const rows = parseCSV(text);
+        if (!rows.length) { setError('CSV must include headers: en, th (optional: pos, example)'); return; }
+
+        // De-dup within CSV by EN (case-insensitive)
+        const seen = new Set();
+        const uniqueRows = [];
+        for (const r of rows) {
+          const key = r.en.trim().toLowerCase();
+          if (!seen.has(key)) { uniqueRows.push(r); seen.add(key); }
+        }
+
+        // Check against existing deck (by EN, case-insensitive)
+        const existingByEN = new Map(store.deck.map(d => [d.en.trim().toLowerCase(), d]));
+        const newRows = [];
+        const dupRows = [];
+        uniqueRows.forEach(r => {
+          const key = r.en.trim().toLowerCase();
+          if (existingByEN.has(key)) dupRows.push(r);
+          else newRows.push(r);
+        });
+
+        setPendingImport({ newRows, dupRows, byEN: existingByEN });
+        setError("");
+      } catch {
+        setError('Failed to read file.');
+      }
+    };
+    reader.readAsText(f);
+  }
+
+  function applyImportSkip() {
+    if (!pendingImport) return;
+    const { newRows } = pendingImport;
+    const startId = (store.deck.at(-1)?.id || 0) + 1;
+    const newCards = newRows.map((r, i) => ({ id: startId + i, ...r }));
+    const nextDeck = [...store.deck, ...newCards];
+    const nextProgress = {};
+    newCards.forEach((c) => { nextProgress[c.id] = { ef: 2.5, interval: 0, due: todayKey(), correct: 0, wrong: 0, reps: 0, introduced: false, introducedOn: null }; });
+    setStore((s) => ({ ...s, deck: nextDeck, cards: { ...s.cards, ...nextProgress } }));
+    setPendingImport(null);
+  }
+
+  function applyImportReplace() {
+    if (!pendingImport) return;
+    const { newRows, dupRows, byEN } = pendingImport;
+    // Replace existing entries for duplicates (keep same id)
+    const deckMap = new Map(store.deck.map(d => [d.id, d]));
+    // Replace
+    dupRows.forEach(r => {
+      const existing = byEN.get(r.en.trim().toLowerCase());
+      if (existing) {
+        deckMap.set(existing.id, { ...existing, ...r }); // overwrite fields from CSV
+      }
+    });
+    // Append new
+    const startId = Math.max(...Array.from(deckMap.keys())) + 1;
+    newRows.forEach((r, i) => {
+      deckMap.set(startId + i, { id: startId + i, ...r });
+    });
+
+    const nextDeck = Array.from(deckMap.values()).sort((a, b) => a.id - b.id);
+    const nextCards = { ...store.cards };
+    // Ensure progress for appended rows
+    for (const d of nextDeck) {
+      if (!nextCards[d.id]) {
+        nextCards[d.id] = { ef: 2.5, interval: 0, due: todayKey(), correct: 0, wrong: 0, reps: 0, introduced: false, introducedOn: null };
+      }
+    }
+    setStore((s) => ({ ...s, deck: nextDeck, cards: nextCards }));
+    setPendingImport(null);
+  }
+
+  return (
+    <>
+      <Card>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="font-semibold">Import words from CSV</div>
+            <div className="text-sm text-slate-400">Headers: en, th, pos, example</div>
+          </div>
+          <button className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-2 inline-flex items-center gap-2" onClick={() => fileRef.current?.click()}>
+            <UploadCloud className="size-4" /> Choose file
+          </button>
+          <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={onFile} />
+        </div>
+        {error && <div className="text-rose-300 text-sm mt-2">{error}</div>}
+        <div className="mt-4 text-sm text-slate-300">Total words: {store.deck.length}</div>
+      </Card>
+
+      {/* Warning Dialog for duplicates */}
+      {pendingImport && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg rounded-2xl bg-slate-900 border border-white/10 p-5">
+            <div className="flex items-center gap-2 text-amber-300">
+              <AlertTriangle className="size-5" />
+              <div className="font-semibold">Duplicates detected</div>
+            </div>
+            <div className="mt-3 text-sm text-slate-200">
+              <p className="mb-2">Your CSV has {pendingImport.dupRows.length} words that already exist. What would you like to do?</p>
+              <ul className="list-disc pl-5 space-y-1">
+                <li><b>Skip duplicates</b> — only import new words; existing ones stay unchanged.</li>
+                <li><b>Replace duplicates</b> — overwrite existing words with CSV data.</li>
+              </ul>
+              {pendingImport.dupRows.length ? (
+                <div className="mt-3 max-h-32 overflow-auto bg-white/5 rounded p-2 text-slate-300">
+                  {pendingImport.dupRows.map((r, i)=> (
+                    <div key={i} className="text-xs">• {r.en} — {r.th}</div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2 justify-end">
+              <button onClick={() => setPendingImport(null)} className="rounded bg-white/10 px-4 py-2 hover:bg-white/20">Cancel</button>
+              <button onClick={applyImportSkip} className="rounded bg-emerald-600 px-4 py-2 hover:bg-emerald-700">Skip duplicates</button>
+              <button onClick={applyImportReplace} className="rounded bg-amber-600 px-4 py-2 hover:bg-amber-700">Replace duplicates</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* =============================================
+   Manage Words (search + CRUD)
+============================================= */
+function ManageWords({ store, setStore }) {
+  const [en, setEn] = useState("");
+  const [th, setTh] = useState("");
+  const [example, setExample] = useState("");
+  const [pos, setPos] = useState("noun");
+  const [editingId, setEditingId] = useState(null);
+
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const filteredDeck = useMemo(() => {
+    if (!q) return store.deck;
+    return store.deck.filter(d =>
+      d.en.toLowerCase().includes(q) || d.th.toLowerCase().includes(q)
+    );
+  }, [q, store.deck]);
+
+  function clearForm() {
+    setEn(""); setTh(""); setExample(""); setPos("noun"); setEditingId(null);
+  }
+
+  function addWord() {
+    if (!en.trim() || !th.trim()) return alert("Please enter EN and TH.");
+    const nextId = (store.deck.at(-1)?.id || 0) + 1;
+    const newCard = { id: nextId, en, th, pos, example };
+    const newDeck = [...store.deck, newCard];
+    setStore((s) => ({
+      ...s,
+      deck: newDeck,
+      cards: { ...s.cards, [nextId]: { ef: 2.5, interval: 0, due: todayKey(), correct: 0, wrong: 0, reps: 0, introduced: false, introducedOn: null } }
+    }));
+    clearForm();
+  }
+
+  function startEdit(card) {
+    setEditingId(card.id);
+    setEn(card.en); setTh(card.th); setExample(card.example || ""); setPos(card.pos || "noun");
+  }
+
+  function updateWord() {
+    if (!editingId) return;
+    const newDeck = store.deck.map((c) => c.id === editingId ? { ...c, en, th, example, pos } : c);
+    setStore((s) => ({ ...s, deck: newDeck }));
+    clearForm();
+  }
+
+  function deleteWord(id) {
+    if (!confirm("Delete this word?")) return;
+    const newDeck = store.deck.filter((c) => c.id !== id);
+    const newCards = { ...store.cards };
+    delete newCards[id];
+    setStore((s) => ({ ...s, deck: newDeck, cards: newCards }));
+    if (editingId === id) clearForm();
+  }
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-lg font-bold">Manage words</div>
+        <div className="relative">
+          <Search className="size-4 absolute left-2 top-1/2 -translate-y-1/2 text-slate-500" />
+          <input
+            value={query}
+            onChange={(e)=> setQuery(e.target.value)}
+            placeholder="Search EN or TH"
+            className="pl-8 pr-2 py-2 rounded bg-white text-black placeholder-slate-500 w-52"
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
+        <input className="w-full p-2 bg-white text-black rounded placeholder-slate-500" placeholder="EN (word)" value={en} onChange={(e) => setEn(e.target.value)} />
+        <input className="w-full p-2 bg-white text-black rounded placeholder-slate-500" placeholder="TH (meaning)" value={th} onChange={(e) => setTh(e.target.value)} />
+        <input className="w-full p-2 bg-white text-black rounded placeholder-slate-500" placeholder="Example sentence (optional)" value={example} onChange={(e) => setExample(e.target.value)} />
+        <select className="w-full p-2 bg-white text-black rounded" value={pos} onChange={(e) => setPos(e.target.value)}>
+          <option value="noun">noun</option>
+          <option value="verb">verb</option>
+          <option value="adjective">adjective</option>
+          <option value="adverb">adverb</option>
+          <option value="noun/verb">noun/verb</option>
+        </select>
+      </div>
+      <div className="flex gap-2 mb-6">
+        {editingId ? (
+          <>
+            <button onClick={updateWord} className="px-4 py-2 bg-blue-500 rounded hover:bg-blue-600">Update</button>
+            <button onClick={clearForm} className="px-4 py-2 bg-gray-500 rounded hover:bg-gray-600">Cancel</button>
+          </>
+        ) : (
+          <button onClick={addWord} className="px-4 py-2 bg-green-500 rounded hover:bg-green-600">Add</button>
+        )}
+      </div>
+
+      <div className="max-h-80 overflow-auto pr-1">
+        <ul className="space-y-2">
+          {filteredDeck.map((item) => (
+            <li key={item.id} className="flex justify-between items-center gap-3 bg-white/5 px-3 py-2 rounded-xl">
+              <span className="text-sm">
+                <b>{item.en}</b> — {item.th} <i className="text-slate-300">({item.pos})</i>
+                {item.example ? <span className="text-slate-300"> · “{item.example}”</span> : null}
+              </span>
+              <div className="flex gap-2 shrink-0">
+                <button onClick={() => startEdit(item)} className="px-2 py-1 bg-yellow-500 rounded hover:bg-yellow-600 text-sm">Edit</button>
+                <button onClick={() => deleteWord(item.id)} className="px-2 py-1 bg-red-500 rounded hover:bg-red-600 text-sm">Delete</button>
+              </div>
+            </li>
+          ))}
+          {!filteredDeck.length && (
+            <li className="text-sm text-slate-300">No words found.</li>
+          )}
+        </ul>
+      </div>
+    </Card>
+  );
+}
+
 function Footer() {
   return (
     <footer className="hidden md:block fixed bottom-0 left-0 right-0 border-t border-white/10 bg-black/30 backdrop-blur">
@@ -684,4 +1486,42 @@ function Footer() {
       </div>
     </footer>
   );
+}
+
+/* ==========================================================
+   Lightweight Dev Tests (run once, logs to console)
+========================================================== */
+function runDevTests() {
+  try {
+    const csv1 = "en,th,pos,example\nhello,สวัสดี,noun,hello there";
+    const rows1 = parseCSV(csv1);
+    console.assert(Array.isArray(rows1) && rows1.length === 1, "parseCSV basic length");
+    console.assert(rows1[0].en === "hello" && rows1[0].th === "สวัสดี", "parseCSV fields");
+
+    const csv2 = 'en,th\n"a, b",เอ บี';
+    const rows2 = parseCSV(csv2);
+    console.assert(rows2.length === 1 && rows2[0].en === "a, b", "parseCSV quoted comma");
+
+    const base = { ef: 2.5, interval: 0, reps: 0, due: todayKey(), correct: 0, wrong: 0, introduced: true, introducedOn: todayKey() };
+    const i1 = scheduleNext(base, 4, { easy: 3, good: 2, hard: 1 });
+    console.assert(i1.interval >= 2 && i1.reps === 1, "sched first success");
+
+    const i2 = scheduleNext({ ...base, ...i1 }, 4, { easy: 3, good: 2, hard: 1 });
+    console.assert(i2.interval >= 3 && i2.reps === 2, "sched second success");
+
+    const i3 = scheduleNext({ ...base, ...i2 }, 5, { easy: 3, good: 2, hard: 1 });
+    console.assert(i3.interval > i2.interval, "sched grows later");
+
+    const fail = scheduleNext(base, 2, { easy: 3, good: 2, hard: 1 });
+    console.assert(fail.reps === 0 && fail.interval >= 1, "sched fail resets reps to 0");
+
+    console.log("[EN Trainer] Dev tests passed");
+  } catch (e) {
+    console.error("[EN Trainer] Dev tests failed", e);
+  }
+}
+
+if (typeof window !== "undefined" && !window.__EN_TRAINER_TESTED__) {
+  window.__EN_TRAINER_TESTED__ = true;
+  runDevTests();
 }
