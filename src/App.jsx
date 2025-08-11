@@ -516,19 +516,28 @@ function QSItem({ icon: Icon, title, desc, onClick }) {
 }
 
 function Flashcards({ store, setStore, onXP }) {
-  const dueCards = useMemo(() =>
-    store.deck.filter((c) => {
-      const prog = store.cards[c.id] ?? {};
-      return !!prog.introduced && (prog.due ?? todayKey()) <= todayKey();
-    }),
+  // Only cards that are introduced and due
+  const dueCards = useMemo(
+    () =>
+      store.deck.filter((c) => {
+        const prog = store.cards[c.id] ?? {};
+        return !!prog.introduced && (prog.due ?? todayKey()) <= todayKey();
+      }),
     [store.deck, store.cards]
   );
+
   const [idx, setIdx] = useState(0);
   const [show, setShow] = useState(false);
-  const card = dueCards[idx];
 
+  // When the number of due cards changes, keep index valid
+  useEffect(() => {
+    if (idx >= dueCards.length && dueCards.length > 0) setIdx(0);
+  }, [dueCards.length, idx]);
+
+  // Reset “show translation” when card changes
   useEffect(() => { setShow(false); }, [idx]);
 
+  // If nothing due, show the "all caught up" card
   if (!dueCards.length) {
     return (
       <Card>
@@ -543,25 +552,53 @@ function Flashcards({ store, setStore, onXP }) {
     );
   }
 
+  // Safe to read current card now
+  const card = dueCards[idx];
+
   function grade(quality) {
-    const prog = store.cards[card.id];
+    // Defensive read in case something changes between click & render
+    if (!card) return;
+
+    const prog = store.cards[card.id] ?? {
+      ef: 2.5, interval: 0, reps: 0, correct: 0, wrong: 0, introduced: true, introducedOn: todayKey(), due: todayKey()
+    };
+
     const next = scheduleNext(prog, quality, store.intervals);
-    const updated = { ...prog, ...next, correct: prog.correct + (quality >= 3 ? 1 : 0), wrong: prog.wrong + (quality < 3 ? 1 : 0) };
+    const updated = {
+      ...prog,
+      ...next,
+      correct: prog.correct + (quality >= 3 ? 1 : 0),
+      wrong: prog.wrong + (quality < 3 ? 1 : 0),
+    };
+
     setStore((s) => ({ ...s, cards: { ...s.cards, [card.id]: updated } }));
     onXP(quality >= 3 ? 10 : 4);
-    if (idx < dueCards.length - 1) setIdx(idx + 1); else setIdx(0);
+
+    // Decide next index based on the OLD list length; a clamp effect above will
+    // keep it valid after the list shrinks.
+    setIdx((i) => (i < dueCards.length - 1 ? i + 1 : 0));
   }
+
+  const remainingAfterThis = Math.max(0, dueCards.length - 1);
 
   return (
     <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2">
         <div className="rounded-3xl border border-white/10 bg-white/5 p-6 min-h-[60dvh] sm:min-h-[320px] flex flex-col">
-          <div className="text-sm text-slate-300">Card {idx + 1}/{dueCards.length}</div>
+          <div className="text-sm text-slate-300 flex items-center justify-between">
+            <span>Card {idx + 1}/{dueCards.length}</span>
+            <span className="text-slate-400">Remaining today: <b>{remainingAfterThis}</b></span>
+          </div>
+
           <div className="mt-2 text-4xl font-extrabold tracking-tight">{card.en}</div>
           <div className="text-sm text-slate-400">{card.pos}</div>
+
           {!show && (
             <div className="mt-6">
-              <button onClick={() => speak(card.en, "en-US")} className="inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm">
+              <button
+                onClick={() => speak(card.en, "en-US")}
+                className="inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm"
+              >
                 <Volume2 className="size-4" /> Listen (EN)
               </button>
             </div>
@@ -569,26 +606,30 @@ function Flashcards({ store, setStore, onXP }) {
 
           <AnimatePresence>
             {show && (
-              <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-6">
+              <motion.div
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="mt-6"
+              >
                 <div className="text-xl">{card.th}</div>
                 <div className="text-sm text-slate-300 mt-2">Example: <i>{card.example}</i></div>
               </motion.div>
             )}
           </AnimatePresence>
 
-          {/* Mobile-safe action layout */}
-          <div className="mt-auto pt-6 sm:flex sm:items-center sm:gap-2">
+          <div className="mt-auto pt-6 flex flex-wrap gap-2">
             <button
               onClick={() => setShow(true)}
-              className="rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-3 w-full sm:w-auto"
+              className="rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-2"
             >
               Show translation
             </button>
 
-            <div className="mt-3 sm:mt-0 sm:ml-auto grid grid-cols-3 gap-2 w-full sm:w-auto">
-              <button onClick={() => grade(2)} className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3">Hard</button>
-              <button onClick={() => grade(4)} className="rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-3">Good</button>
-              <button onClick={() => grade(5)} className="rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-3">Easy</button>
+            <div className="ml-auto flex gap-2">
+              <button onClick={() => grade(2)} className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-2">Hard</button>
+              <button onClick={() => grade(4)} className="rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-2">Good</button>
+              <button onClick={() => grade(5)} className="rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-2">Easy</button>
             </div>
           </div>
         </div>
