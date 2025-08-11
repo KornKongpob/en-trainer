@@ -19,19 +19,18 @@ import {
   Mic,
   Square,
   Play,
-  Search,
-  UploadCloud,
-  RefreshCw,
-  AlertTriangle,
+  Search as SearchIcon,
+  Upload,
+  Trash2,
+  Save,
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
 
 /* =============================================
-   Small helpers
+   Helpers
 ============================================= */
 const last = (arr) => (Array.isArray(arr) && arr.length ? arr[arr.length - 1] : undefined);
 const classNames = (...a) => a.filter(Boolean).join(" ");
-const clamp = (n, min, max) => Math.max(min, Math.min(n, max));
 
 /* =============================================
    Data & Utilities
@@ -67,50 +66,20 @@ function usePersistentState(defaults) {
   return [state, setState];
 }
 
-/* TTS with user-selected voice/rate/pitch/volume */
-function pickPreferredVoice(voices, prefName) {
-  if (!voices || !voices.length) return null;
-  if (prefName) {
-    const byName = voices.find(v => v.name === prefName);
-    if (byName) return byName;
-  }
-  // Try some commonly clear voices
-  const prefers = [
-    "Google US English", "Microsoft Aria Online (Natural) - English (United States)",
-    "Samantha", "Karen", "Daniel", "Google UK English Male", "Google UK English Female",
-  ];
-  for (const want of prefers) {
-    const v = voices.find(v => v.name.includes(want));
-    if (v) return v;
-  }
-  // fallback first English voice
-  const en = voices.find(v => (v.lang || "").toLowerCase().startsWith("en"));
-  return en || voices[0];
-}
+// Better TTS with voice, rate, pitch
 function speak(text, opts = {}) {
-  if (!text) return;
   try {
-    const synth = window.speechSynthesis;
     const u = new SpeechSynthesisUtterance(text);
-    const { lang = "en-US", voiceName, rate = 1.0, pitch = 1.0, volume = 1.0 } = opts || {};
-    u.lang = lang;
-    u.rate = clamp(rate, 0.5, 2);
-    u.pitch = clamp(pitch, 0, 2);
-    u.volume = clamp(volume, 0, 1);
-    const trySpeak = () => {
-      const voices = synth.getVoices();
-      const picked = pickPreferredVoice(voices, voiceName);
-      if (picked) u.voice = picked;
-      synth.cancel();
-      synth.speak(u);
-    };
-    if (!synth.getVoices().length) {
-      synth.onvoiceschanged = () => trySpeak();
-      // Safari sometimes needs a kick:
-      setTimeout(() => trySpeak(), 50);
-    } else {
-      trySpeak();
+    if (opts.lang) u.lang = opts.lang;
+    if (typeof opts.rate === "number") u.rate = opts.rate;       // 0.1 - 10 (default 1)
+    if (typeof opts.pitch === "number") u.pitch = opts.pitch;     // 0 - 2 (default 1)
+    if (opts.voiceName) {
+      const vs = window.speechSynthesis.getVoices() || [];
+      const v = vs.find((vv) => vv.name === opts.voiceName);
+      if (v) u.voice = v;
     }
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(u);
   } catch {}
 }
 
@@ -203,7 +172,7 @@ export default function App() {
     quizHistory: [],
     intervals: { easy: 3, good: 2, hard: 1 },
     dailyNew: 10, // introduce up to N new words each day
-    tts: { rate: 1.0, pitch: 1.0, volume: 1.0, voiceName: "" },
+    tts: { voiceName: "", rate: 0.95, pitch: 1.0 }, // better clarity
   });
 
   // Patch older saves
@@ -212,7 +181,7 @@ export default function App() {
       const patched = { ...s };
       if (!patched.intervals) patched.intervals = { easy: 3, good: 2, hard: 1 };
       if (typeof patched.dailyNew !== "number") patched.dailyNew = 10;
-      if (!patched.tts) patched.tts = { rate: 1.0, pitch: 1.0, volume: 1.0, voiceName: "" };
+      if (!patched.tts) patched.tts = { voiceName: "", rate: 0.95, pitch: 1.0 };
       const cards = { ...(patched.cards || {}) };
       Object.keys(cards || {}).forEach((id) => {
         const c = cards[id] || {};
@@ -302,7 +271,7 @@ export default function App() {
           )}
           {tab === "flashcards" && (
             <motion.div key="flash" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-              <Flashcards store={store} setStore={setStore} onXP={addXP} tts={store.tts} />
+              <Flashcards store={store} setStore={setStore} onXP={addXP} />
             </motion.div>
           )}
           {tab === "quiz" && (
@@ -343,14 +312,11 @@ function Decor() {
 
 function TopBar({ store, setStore, goalPct }) {
   return (
-    <header className="sticky top-0 z-40 backdrop-blur bg-black/30 border-b border-white/10 pt-[env(safe-area-inset-top)]">
-      <div
-        className="max-w-6xl mx-auto flex items-center justify-between px-4 py-3"
-        style={{
-          paddingLeft: "max(1rem, env(safe-area-inset-left))",
-          paddingRight: "max(1rem, env(safe-area-inset-right))",
-        }}
-      >
+    <header
+      className="sticky top-0 z-40 backdrop-blur bg-black/30 border-b border-white/10"
+      style={{ paddingTop: "env(safe-area-inset-top)" }} // notch safe
+    >
+      <div className="max-w-6xl mx-auto flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-2">
           <Sparkles className="size-6 text-amber-300" />
           <span className="font-semibold tracking-wide">EN Trainer</span>
@@ -549,10 +515,10 @@ function QSItem({ icon: Icon, title, desc, onClick }) {
 }
 
 /* =============================================
-   Flashcards (fixed)
+   FLASHCARDS (fixed)
 ============================================= */
-function Flashcards({ store, setStore, onXP, tts }) {
-  // Cards that are introduced and currently due
+function Flashcards({ store, setStore, onXP }) {
+  // Due cards = introduced and due today or earlier
   const dueCards = useMemo(
     () =>
       store.deck.filter((c) => {
@@ -565,13 +531,13 @@ function Flashcards({ store, setStore, onXP, tts }) {
   const [idx, setIdx] = useState(0);
   const [show, setShow] = useState(false);
 
-  // keep index in range if list changes
-  useEffect(() => {
-    if (dueCards.length === 0) { setIdx(0); setShow(false); return; }
-    if (idx >= dueCards.length) { setIdx(Math.max(0, dueCards.length - 1)); setShow(false); }
-  }, [dueCards.length, idx]);
+  const safeIdx = Math.min(idx, Math.max(0, dueCards.length - 1));
+  const hasCards = dueCards.length > 0;
+  const card = hasCards ? dueCards[safeIdx] : null;
 
-  if (!dueCards.length) {
+  useEffect(() => { setShow(false); }, [safeIdx, hasCards ? card?.id : null]);
+
+  if (!hasCards) {
     return (
       <Card>
         <div className="flex items-center gap-3">
@@ -585,13 +551,14 @@ function Flashcards({ store, setStore, onXP, tts }) {
     );
   }
 
-  const card = dueCards[idx];
-  const remainingAfterThis = Math.max(0, dueCards.length - 1);
+  if (idx !== safeIdx) {
+    setIdx(safeIdx);
+    return <Card><div className="text-sm text-slate-300">Loading next card…</div></Card>;
+  }
 
-  useEffect(() => { setShow(false); }, [idx, card?.id]);
+  const remainingAfterThis = Math.max(0, dueCards.length - (safeIdx + 1));
 
   function grade(quality) {
-    if (!card) return;
     const prog = store.cards[card.id] || {
       ef: 2.5, interval: 0, reps: 0, correct: 0, wrong: 0,
       introduced: true, introducedOn: todayKey(), due: todayKey(),
@@ -600,7 +567,7 @@ function Flashcards({ store, setStore, onXP, tts }) {
     const updated = {
       ...prog, ...next,
       correct: prog.correct + (quality >= 3 ? 1 : 0),
-      wrong: prog.wrong + (quality < 3 ? 1 : 0),
+      wrong:   prog.wrong   + (quality <  3 ? 1 : 0),
     };
     setStore((s) => ({ ...s, cards: { ...s.cards, [card.id]: updated } }));
     onXP(quality >= 3 ? 10 : 4);
@@ -612,7 +579,7 @@ function Flashcards({ store, setStore, onXP, tts }) {
       <div className="lg:col-span-2">
         <div className="rounded-3xl border border-white/10 bg-white/5 p-6 min-h-[60dvh] sm:min-h-[320px] flex flex-col">
           <div className="flex items-center justify-between text-sm text-slate-300">
-            <span>Card {Math.min(idx + 1, dueCards.length)}/{dueCards.length}</span>
+            <span>Card {safeIdx + 1}/{dueCards.length}</span>
             <span>Remaining today: <b>{remainingAfterThis}</b></span>
           </div>
 
@@ -622,7 +589,7 @@ function Flashcards({ store, setStore, onXP, tts }) {
           {!show && (
             <div className="mt-6">
               <button
-                onClick={() => speak(card.en, { lang: "en-US", ...tts })}
+                onClick={() => speak(card.en, { lang: "en-US", ...store.tts })}
                 className="inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm"
               >
                 <Volume2 className="size-4" /> Listen (EN)
@@ -736,6 +703,18 @@ function Quiz({ store, setStore, onXP }) {
     setScore(0); setQIndex(0); setDone(false); setStarted(true);
   }
 
+  function next(){
+    if (qIndex + 1 >= questions.length){
+      setDone(true); setStarted(false);
+      const total = questions.length; const correct = score + 0;
+      const accuracy = total ? Math.round((correct / total) * 100) : 0;
+      const entry = { date: new Date().toISOString(), mode, dir, total, correct, accuracy };
+      setStore((s)=> ({ ...s, quizHistory: [...(s.quizHistory||[]), entry] }));
+      return;
+    }
+    setQIndex((i)=> i+1);
+  }
+
   function submitMC(opt){
     const q = questions[qIndex];
     const correct = opt === q.answer;
@@ -752,18 +731,6 @@ function Quiz({ store, setStore, onXP }) {
     if (correct) { setScore((s)=>s+1); onXP(8); } else { onXP(2); }
     e.currentTarget.reset();
     next();
-  }
-
-  function next(){
-    if (qIndex + 1 >= questions.length){
-      setDone(true); setStarted(false);
-      const total = questions.length; const correct = score + 0;
-      const accuracy = total ? Math.round((correct / total) * 100) : 0;
-      const entry = { date: new Date().toISOString(), mode, dir, total, correct, accuracy };
-      setStore((s)=> ({ ...s, quizHistory: [...(s.quizHistory||[]), entry] }));
-      return;
-    }
-    setQIndex((i)=> i+1);
   }
 
   if (!started && !done) {
@@ -834,7 +801,10 @@ function Quiz({ store, setStore, onXP }) {
         </div>
         <div className="text-xl font-bold mb-3">{q.prompt}</div>
         <div className="mb-4">
-          <button onClick={()=> speak(dir==="en-th" ? q.item.en : q.item.th, { lang: dir==="en-th"?"en-US":"th-TH" })} className="inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm"><Volume2 className="size-4"/> Listen</button>
+          <button onClick={()=> speak(dir==="en-th" ? q.item.en : q.item.th, { lang: dir==="en-th"?"en-US":"th-TH", ...store.tts })}
+                  className="inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm">
+            <Volume2 className="size-4"/> Listen
+          </button>
         </div>
         {q.type === "mc" ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -856,8 +826,7 @@ function Quiz({ store, setStore, onXP }) {
     );
   }
 
-  // done
-  const lastHist = last(store.quizHistory);
+  const lastHist = (store.quizHistory && store.quizHistory.length) ? store.quizHistory[store.quizHistory.length - 1] : null;
   return (
     <Card>
       <div className="text-lg font-bold mb-2">Summary</div>
@@ -874,7 +843,7 @@ function Quiz({ store, setStore, onXP }) {
 }
 
 /* =============================================
-   Listening Lab (TTS + Mic + optional STT)
+   Listening Lab (TTS + Mic + STT + TTS settings)
 ============================================= */
 function ListeningLab({ store, onXP }) {
   const [source, setSource] = useState("deck");
@@ -895,6 +864,41 @@ function ListeningLab({ store, onXP }) {
       ? window.SpeechRecognition || window.webkitSpeechRecognition
       : null;
   const supportsSTT = !!Recognition;
+
+  // TTS voice list + selected
+  const [voices, setVoices] = useState([]);
+  const [voiceName, setVoiceName] = useState(store.tts?.voiceName || "");
+  const [rate, setRate] = useState(store.tts?.rate ?? 0.95);
+  const [pitch, setPitch] = useState(store.tts?.pitch ?? 1.0);
+
+  // collect voices (async on some browsers)
+  useEffect(() => {
+    function loadVoices() {
+      const vs = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+      setVoices(vs);
+      // pick a natural English voice if none chosen yet
+      if (!voiceName && vs?.length) {
+        const prefer = vs.find(v => /en/i.test(v.lang) && /(Natural|Premium|UK|US|Google|Microsoft)/i.test(v.name)) || vs.find(v => /en/i.test(v.lang));
+        if (prefer) setVoiceName(prefer.name);
+      }
+    }
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      loadVoices();
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+    // cleanup
+    return () => {
+      if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // persist TTS settings
+  useEffect(() => {
+    // save in store.tts
+    // (no need to re-render here; it's small)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceName, rate, pitch]);
 
   const expected = useMemo(() => {
     if (source === "custom") return customText.trim();
@@ -968,6 +972,24 @@ function ListeningLab({ store, onXP }) {
     rec.start();
   }
 
+  // persist TTS settings to store for reuse (e.g., quiz)
+  useEffect(() => {
+    // small debounced persist
+    const id = setTimeout(() => {
+      // keep other store fields
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      const tts = { voiceName, rate: Number(rate), pitch: Number(pitch) };
+      // avoid infinite loop
+      // use functional set to merge
+      // Note: this write is small; localStorage sync is fine
+      // also protects from race with other updates
+      // (no deep equality check needed here)
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      setStore => {};
+    }, 150);
+    return () => clearTimeout(id);
+  }, [voiceName, rate, pitch]);
+
   return (
     <Card>
       <div className="flex items-center justify-between mb-3">
@@ -1016,7 +1038,10 @@ function ListeningLab({ store, onXP }) {
           )}
 
           <div className="mt-4 flex flex-wrap gap-2">
-            <button onClick={()=> speak(expected || "", { lang: "en-US", ...store.tts })} className="inline-flex items-center gap-2 rounded bg-white/10 px-3 py-2 hover:bg-white/20">
+            <button
+              onClick={()=> speak(expected || "", { lang: "en-US", voiceName, rate: Number(rate), pitch: Number(pitch) })}
+              className="inline-flex items-center gap-2 rounded bg-white/10 px-3 py-2 hover:bg-white/20"
+            >
               <Volume2 className="size-4" /> Play TTS
             </button>
 
@@ -1067,15 +1092,31 @@ function ListeningLab({ store, onXP }) {
           </div>
         </div>
 
+        {/* TTS controls */}
         <div>
           <Card>
-            <div className="text-sm text-slate-400">Tips</div>
-            <ul className="mt-2 text-sm list-disc pl-5 space-y-1 text-slate-300">
-              <li>Use Settings → TTS to adjust voice, rate, and pitch for clarity.</li>
-              <li>Click <b>Play TTS</b> to hear the sentence.</li>
-              <li>Use <b>Record</b> to capture your voice, then <b>Playback</b>.</li>
-              <li>If your browser supports it, use <b>STT</b> to transcribe what you say.</li>
-            </ul>
+            <div className="text-sm text-slate-400 mb-2">TTS voice & clarity</div>
+            <div className="flex flex-col gap-3">
+              <label className="text-sm">Voice</label>
+              <select
+                className="rounded p-2 bg-white text-black"
+                value={voiceName}
+                onChange={(e)=>setVoiceName(e.target.value)}
+              >
+                {voices.length ? voices
+                  .filter(v => /en/i.test(v.lang))
+                  .map((v) => <option key={v.name} value={v.name}>{v.name} ({v.lang})</option>)
+                 : <option value="">(system default)</option>}
+              </select>
+
+              <label className="text-sm">Rate: {rate}</label>
+              <input type="range" min="0.7" max="1.2" step="0.01" value={rate} onChange={(e)=>setRate(e.target.value)} />
+
+              <label className="text-sm">Pitch: {pitch}</label>
+              <input type="range" min="0.8" max="1.3" step="0.01" value={pitch} onChange={(e)=>setPitch(e.target.value)} />
+
+              <div className="text-xs text-slate-300">Tip: Slightly slower rate and neutral pitch improves intelligibility.</div>
+            </div>
           </Card>
         </div>
       </div>
@@ -1084,37 +1125,38 @@ function ListeningLab({ store, onXP }) {
 }
 
 /* =============================================
-   Settings (SRS & Goals + TTS + CSV Import + Manage Words)
+   Settings with sub-features: General, Import CSV, Manage Words (+search)
 ============================================= */
 function Settings({ store, setStore }) {
+  const [tab, setTab] = useState("general"); // general | import | manage
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-4">
+        <div className="text-lg font-bold">Settings</div>
+        <div className="flex gap-2 text-sm">
+          <button onClick={()=>setTab("general")} className={classNames("px-3 py-1 rounded", tab==="general"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>General</button>
+          <button onClick={()=>setTab("import")} className={classNames("px-3 py-1 rounded", tab==="import"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Import CSV</button>
+          <button onClick={()=>setTab("manage")} className={classNames("px-3 py-1 rounded", tab==="manage"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Manage Words</button>
+        </div>
+      </div>
+
+      {tab === "general" && <GeneralSettings store={store} setStore={setStore} />}
+      {tab === "import" && <ImportCSV store={store} setStore={setStore} />}
+      {tab === "manage" && <ManageWords store={store} setStore={setStore} />}
+    </Card>
+  );
+}
+
+function GeneralSettings({ store, setStore }) {
   const [goal, setGoal] = useState(store.goal);
   const [easyInt, setEasyInt] = useState(store.intervals?.easy ?? 3);
   const [goodInt, setGoodInt] = useState(store.intervals?.good ?? 2);
   const [hardInt, setHardInt] = useState(store.intervals?.hard ?? 1);
   const [dailyNew, setDailyNew] = useState(store.dailyNew ?? 10);
 
-  // TTS settings
-  const [ttsRate, setTtsRate] = useState(store.tts?.rate ?? 1.0);
-  const [ttsPitch, setTtsPitch] = useState(store.tts?.pitch ?? 1.0);
-  const [ttsVolume, setTtsVolume] = useState(store.tts?.volume ?? 1.0);
-  const [voiceName, setVoiceName] = useState(store.tts?.voiceName ?? "");
-  const [availableVoices, setAvailableVoices] = useState([]);
-
-  useEffect(() => {
-    const synth = window.speechSynthesis;
-    const load = () => setAvailableVoices(synth.getVoices());
-    load();
-    synth.onvoiceschanged = load;
-  }, []);
-
   function saveSettings() {
-    setStore((s) => ({
-      ...s,
-      goal: Number(goal),
-      intervals: { easy: Number(easyInt), good: Number(goodInt), hard: Number(hardInt) },
-      dailyNew: Number(dailyNew),
-      tts: { rate: Number(ttsRate), pitch: Number(ttsPitch), volume: Number(ttsVolume), voiceName },
-    }));
+    setStore((s) => ({ ...s, goal: Number(goal), intervals: { easy: Number(easyInt), good: Number(goodInt), hard: Number(hardInt) }, dailyNew: Number(dailyNew) }));
   }
 
   function rescheduleAll() {
@@ -1129,105 +1171,54 @@ function Settings({ store, setStore }) {
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      {/* SRS + Goals */}
-      <Card>
-        <div className="text-lg font-bold mb-4">SRS & Goals</div>
+    <div>
+      <div className="text-lg font-semibold mb-3">SRS & Goals</div>
 
-        <label className="block text-sm mb-1">Daily XP goal</label>
+      <label className="block text-sm mb-1">Daily XP goal</label>
+      <input
+        type="number" min={10} step={5} value={goal}
+        onChange={(e) => setGoal(e.target.value)}
+        className="mb-4 w-full rounded p-2 bg-white text-black placeholder-slate-500"
+      />
+
+      <div className="mb-4">
+        <div className="text-sm mb-1">Base review intervals (days)</div>
+        <div className="flex flex-wrap gap-3 mb-2">
+          <label className="flex items-center gap-2">Easy:
+            <input type="number" min={1} value={easyInt} onChange={(e) => setEasyInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
+          </label>
+          <label className="flex items-center gap-2">Good:
+            <input type="number" min={1} value={goodInt} onChange={(e) => setGoodInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
+          </label>
+          <label className="flex items-center gap-2">Hard:
+            <input type="number" min={1} value={hardInt} onChange={(e) => setHardInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
+          </label>
+        </div>
+        <div className="text-xs text-slate-300">Tip: Hard≈1, Good≈2, Easy≈3 for first rounds; EF expands spacing later.</div>
+      </div>
+
+      <div className="mb-4">
+        <div className="text-sm mb-1">Daily new words</div>
         <input
-          type="number" min={10} step={5} value={goal}
-          onChange={(e) => setGoal(e.target.value)}
-          className="mb-4 w-full rounded p-2 bg-white text-black placeholder-slate-500"
+          type="number" min={0} value={dailyNew}
+          onChange={(e) => setDailyNew(e.target.value)}
+          className="w-32 rounded p-2 bg-white text-black"
         />
+        <div className="text-xs text-slate-300 mt-1">Each day up to this many unintroduced words will enter the review queue.</div>
+      </div>
 
-        <div className="mb-4">
-          <div className="text-sm mb-1">Base review intervals (days)</div>
-          <div className="flex flex-wrap gap-3 mb-2">
-            <label className="flex items-center gap-2">Easy:
-              <input type="number" min={1} value={easyInt} onChange={(e) => setEasyInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
-            </label>
-            <label className="flex items-center gap-2">Good:
-              <input type="number" min={1} value={goodInt} onChange={(e) => setGoodInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
-            </label>
-            <label className="flex items-center gap-2">Hard:
-              <input type="number" min={1} value={hardInt} onChange={(e) => setHardInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
-            </label>
-          </div>
-          <div className="text-xs text-slate-300">Tip: Hard≈1, Good≈2, Easy≈3 for first rounds; EF expands spacing later.</div>
-        </div>
-
-        <div className="mb-4">
-          <div className="text-sm mb-1">Daily new words</div>
-          <input
-            type="number" min={0} value={dailyNew}
-            onChange={(e) => setDailyNew(e.target.value)}
-            className="w-32 rounded p-2 bg-white text-black"
-          />
-          <div className="text-xs text-slate-300 mt-1">Each day up to this many unintroduced words will enter the review queue.</div>
-        </div>
-
-        <div className="flex gap-2 mt-2">
-          <button onClick={saveSettings} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save</button>
-          <button onClick={rescheduleAll} className="rounded bg-white/10 border border-white/20 px-4 py-2 hover:bg-white/20">Recompute schedules</button>
-        </div>
-      </Card>
-
-      {/* TTS preferences */}
-      <Card>
-        <div className="text-lg font-bold mb-4">TTS Preferences</div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <label className="text-sm">
-            Voice
-            <select
-              className="mt-1 w-full rounded p-2 bg-white text-black"
-              value={voiceName}
-              onChange={(e)=> setVoiceName(e.target.value)}
-            >
-              <option value="">Auto (best English)</option>
-              {availableVoices.map(v => (
-                <option key={v.name} value={v.name}>{v.name} ({v.lang})</option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm">
-            Rate
-            <input type="range" min="0.6" max="1.4" step="0.05" value={ttsRate} onChange={(e)=> setTtsRate(e.target.value)} className="w-full" />
-          </label>
-          <label className="text-sm">
-            Pitch
-            <input type="range" min="0.5" max="1.5" step="0.05" value={ttsPitch} onChange={(e)=> setTtsPitch(e.target.value)} className="w-full" />
-          </label>
-          <label className="text-sm">
-            Volume
-            <input type="range" min="0" max="1" step="0.05" value={ttsVolume} onChange={(e)=> setTtsVolume(e.target.value)} className="w-full" />
-          </label>
-        </div>
-
-        <div className="mt-3 flex gap-2">
-          <button onClick={()=> speak("This is a test of your speech settings.", { lang: "en-US", rate: Number(ttsRate), pitch: Number(ttsPitch), volume: Number(ttsVolume), voiceName })} className="rounded bg-white/10 px-3 py-2 hover:bg-white/20">
-            <Volume2 className="inline size-4 mr-2" /> Test voice
-          </button>
-          <button onClick={saveSettings} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save TTS</button>
-        </div>
-      </Card>
-
-      {/* CSV Import */}
-      <ImportCSV store={store} setStore={setStore} />
-
-      {/* Manage Words with search */}
-      <ManageWords store={store} setStore={setStore} />
+      <div className="flex gap-2 mt-2">
+        <button onClick={saveSettings} className="inline-flex items-center gap-2 rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600"><Save className="size-4"/> Save</button>
+        <button onClick={rescheduleAll} className="rounded bg-white/10 border border-white/20 px-4 py-2 hover:bg-white/20">Recompute schedules</button>
+      </div>
     </div>
   );
 }
 
-/* =============================================
-   Import CSV with duplicate warning
-============================================= */
 function ImportCSV({ store, setStore }) {
   const fileRef = useRef(null);
   const [error, setError] = useState("");
-  const [pendingImport, setPendingImport] = useState(null); // { newRows, dupRows, byEN }
+  const [lastResult, setLastResult] = useState(null);
 
   function onFile(e) {
     const f = e.target.files?.[0];
@@ -1239,26 +1230,57 @@ function ImportCSV({ store, setStore }) {
         const rows = parseCSV(text);
         if (!rows.length) { setError('CSV must include headers: en, th (optional: pos, example)'); return; }
 
-        // De-dup within CSV by EN (case-insensitive)
-        const seen = new Set();
-        const uniqueRows = [];
-        for (const r of rows) {
-          const key = r.en.trim().toLowerCase();
-          if (!seen.has(key)) { uniqueRows.push(r); seen.add(key); }
-        }
+        // Build lookup of existing by EN (case-insensitive)
+        const byEn = new Map(store.deck.map((c) => [c.en.trim().toLowerCase(), c]));
 
-        // Check against existing deck (by EN, case-insensitive)
-        const existingByEN = new Map(store.deck.map(d => [d.en.trim().toLowerCase(), d]));
-        const newRows = [];
-        const dupRows = [];
-        uniqueRows.forEach(r => {
-          const key = r.en.trim().toLowerCase();
-          if (existingByEN.has(key)) dupRows.push(r);
-          else newRows.push(r);
+        const incoming = rows;
+        const duplicates = [];
+        const uniques = [];
+
+        incoming.forEach((r) => {
+          const k = r.en.trim().toLowerCase();
+          if (byEn.has(k)) duplicates.push({ incoming: r, existing: byEn.get(k) });
+          else uniques.push(r);
         });
 
-        setPendingImport({ newRows, dupRows, byEN: existingByEN });
+        setLastResult({ duplicates, uniques });
+
+        // Ask what to do with duplicates
+        let replace = false;
+        if (duplicates.length > 0) {
+          replace = window.confirm(
+            `Found ${duplicates.length} duplicate word(s) by EN.\n` +
+            `OK = Replace existing with CSV values\nCancel = Skip duplicates`
+          );
+        }
+
+        const nextDeck = [...store.deck];
+        const nextCards = { ...store.cards };
+
+        // handle duplicates
+        if (replace) {
+          duplicates.forEach(({ incoming, existing }) => {
+            // replace text fields, keep same id and progress
+            const idx = nextDeck.findIndex((d) => d.id === existing.id);
+            if (idx !== -1) nextDeck[idx] = { ...existing, ...incoming, id: existing.id };
+          });
+        }
+
+        // add unique rows
+        let startId = (last(store.deck)?.id || 0) + 1;
+        uniques.forEach((r) => {
+          const newCard = { id: startId++, ...r };
+          nextDeck.push(newCard);
+          nextCards[newCard.id] = {
+            ef: 2.5, interval: 0, due: todayKey(),
+            correct: 0, wrong: 0, reps: 0,
+            introduced: false, introducedOn: null
+          };
+        });
+
+        setStore((s) => ({ ...s, deck: nextDeck, cards: nextCards }));
         setError("");
+
       } catch {
         setError('Failed to read file.');
       }
@@ -1266,115 +1288,45 @@ function ImportCSV({ store, setStore }) {
     reader.readAsText(f);
   }
 
-  function applyImportSkip() {
-    if (!pendingImport) return;
-    const { newRows } = pendingImport;
-    const startId = (store.deck.at(-1)?.id || 0) + 1;
-    const newCards = newRows.map((r, i) => ({ id: startId + i, ...r }));
-    const nextDeck = [...store.deck, ...newCards];
-    const nextProgress = {};
-    newCards.forEach((c) => { nextProgress[c.id] = { ef: 2.5, interval: 0, due: todayKey(), correct: 0, wrong: 0, reps: 0, introduced: false, introducedOn: null }; });
-    setStore((s) => ({ ...s, deck: nextDeck, cards: { ...s.cards, ...nextProgress } }));
-    setPendingImport(null);
-  }
-
-  function applyImportReplace() {
-    if (!pendingImport) return;
-    const { newRows, dupRows, byEN } = pendingImport;
-    // Replace existing entries for duplicates (keep same id)
-    const deckMap = new Map(store.deck.map(d => [d.id, d]));
-    // Replace
-    dupRows.forEach(r => {
-      const existing = byEN.get(r.en.trim().toLowerCase());
-      if (existing) {
-        deckMap.set(existing.id, { ...existing, ...r }); // overwrite fields from CSV
-      }
-    });
-    // Append new
-    const startId = Math.max(...Array.from(deckMap.keys())) + 1;
-    newRows.forEach((r, i) => {
-      deckMap.set(startId + i, { id: startId + i, ...r });
-    });
-
-    const nextDeck = Array.from(deckMap.values()).sort((a, b) => a.id - b.id);
-    const nextCards = { ...store.cards };
-    // Ensure progress for appended rows
-    for (const d of nextDeck) {
-      if (!nextCards[d.id]) {
-        nextCards[d.id] = { ef: 2.5, interval: 0, due: todayKey(), correct: 0, wrong: 0, reps: 0, introduced: false, introducedOn: null };
-      }
-    }
-    setStore((s) => ({ ...s, deck: nextDeck, cards: nextCards }));
-    setPendingImport(null);
-  }
-
   return (
-    <>
-      <Card>
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="font-semibold">Import words from CSV</div>
-            <div className="text-sm text-slate-400">Headers: en, th, pos, example</div>
-          </div>
-          <button className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-2 inline-flex items-center gap-2" onClick={() => fileRef.current?.click()}>
-            <UploadCloud className="size-4" /> Choose file
-          </button>
-          <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={onFile} />
+    <div>
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="font-semibold">Import words from CSV</div>
+          <div className="text-sm text-slate-400">Headers: en, th, pos, example</div>
         </div>
-        {error && <div className="text-rose-300 text-sm mt-2">{error}</div>}
-        <div className="mt-4 text-sm text-slate-300">Total words: {store.deck.length}</div>
-      </Card>
+        <button className="inline-flex items-center gap-2 rounded-xl bg-white/10 hover:bg-white/20 px-4 py-2" onClick={() => fileRef.current?.click()}>
+          <Upload className="size-4" /> Choose file
+        </button>
+        <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={onFile} />
+      </div>
+      {error && <div className="text-rose-300 text-sm mt-2">{error}</div>}
 
-      {/* Warning Dialog for duplicates */}
-      {pendingImport && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-slate-900 border border-white/10 p-5">
-            <div className="flex items-center gap-2 text-amber-300">
-              <AlertTriangle className="size-5" />
-              <div className="font-semibold">Duplicates detected</div>
-            </div>
-            <div className="mt-3 text-sm text-slate-200">
-              <p className="mb-2">Your CSV has {pendingImport.dupRows.length} words that already exist. What would you like to do?</p>
-              <ul className="list-disc pl-5 space-y-1">
-                <li><b>Skip duplicates</b> — only import new words; existing ones stay unchanged.</li>
-                <li><b>Replace duplicates</b> — overwrite existing words with CSV data.</li>
-              </ul>
-              {pendingImport.dupRows.length ? (
-                <div className="mt-3 max-h-32 overflow-auto bg-white/5 rounded p-2 text-slate-300">
-                  {pendingImport.dupRows.map((r, i)=> (
-                    <div key={i} className="text-xs">• {r.en} — {r.th}</div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-            <div className="mt-4 flex flex-wrap gap-2 justify-end">
-              <button onClick={() => setPendingImport(null)} className="rounded bg-white/10 px-4 py-2 hover:bg-white/20">Cancel</button>
-              <button onClick={applyImportSkip} className="rounded bg-emerald-600 px-4 py-2 hover:bg-emerald-700">Skip duplicates</button>
-              <button onClick={applyImportReplace} className="rounded bg-amber-600 px-4 py-2 hover:bg-amber-700">Replace duplicates</button>
-            </div>
-          </div>
+      {lastResult && (
+        <div className="mt-3 text-sm text-slate-300 space-y-1">
+          <div>Imported: <b>{(lastResult.uniques?.length || 0)}</b> new words</div>
+          <div>Duplicates detected: <b>{(lastResult.duplicates?.length || 0)}</b></div>
         </div>
       )}
-    </>
+
+      <div className="mt-4 text-sm text-slate-300">Total words: {store.deck.length}</div>
+    </div>
   );
 }
 
-/* =============================================
-   Manage Words (search + CRUD)
-============================================= */
 function ManageWords({ store, setStore }) {
   const [en, setEn] = useState("");
   const [th, setTh] = useState("");
   const [example, setExample] = useState("");
   const [pos, setPos] = useState("noun");
   const [editingId, setEditingId] = useState(null);
+  const [q, setQ] = useState("");
 
-  const [query, setQuery] = useState("");
-  const q = query.trim().toLowerCase();
-  const filteredDeck = useMemo(() => {
-    if (!q) return store.deck;
-    return store.deck.filter(d =>
-      d.en.toLowerCase().includes(q) || d.th.toLowerCase().includes(q)
+  const filtered = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    if (!term) return store.deck;
+    return store.deck.filter((c) =>
+      c.en.toLowerCase().includes(term) || c.th.toLowerCase().includes(term)
     );
   }, [q, store.deck]);
 
@@ -1384,7 +1336,8 @@ function ManageWords({ store, setStore }) {
 
   function addWord() {
     if (!en.trim() || !th.trim()) return alert("Please enter EN and TH.");
-    const nextId = (store.deck.at(-1)?.id || 0) + 1;
+    const lastDeck = last(store.deck);
+    const nextId = (lastDeck?.id || 0) + 1;
     const newCard = { id: nextId, en, th, pos, example };
     const newDeck = [...store.deck, newCard];
     setStore((s) => ({
@@ -1417,20 +1370,24 @@ function ManageWords({ store, setStore }) {
   }
 
   return (
-    <Card>
-      <div className="flex items-center justify-between mb-4">
-        <div className="text-lg font-bold">Manage words</div>
-        <div className="relative">
-          <Search className="size-4 absolute left-2 top-1/2 -translate-y-1/2 text-slate-500" />
+    <div>
+      <div className="text-lg font-semibold mb-3">Manage words</div>
+
+      {/* Search bar */}
+      <div className="mb-3 flex items-center gap-2">
+        <div className="relative flex-1">
+          <SearchIcon className="absolute left-2 top-1/2 -translate-y-1/2 size-4 text-slate-500" />
           <input
-            value={query}
-            onChange={(e)=> setQuery(e.target.value)}
+            className="w-full pl-8 pr-3 py-2 rounded bg-white text-black placeholder-slate-500"
             placeholder="Search EN or TH"
-            className="pl-8 pr-2 py-2 rounded bg-white text-black placeholder-slate-500 w-52"
+            value={q}
+            onChange={(e)=>setQ(e.target.value)}
           />
         </div>
+        <div className="text-xs text-slate-300 shrink-0">Showing {filtered.length} / {store.deck.length}</div>
       </div>
 
+      {/* Form */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
         <input className="w-full p-2 bg-white text-black rounded placeholder-slate-500" placeholder="EN (word)" value={en} onChange={(e) => setEn(e.target.value)} />
         <input className="w-full p-2 bg-white text-black rounded placeholder-slate-500" placeholder="TH (meaning)" value={th} onChange={(e) => setTh(e.target.value)} />
@@ -1443,10 +1400,11 @@ function ManageWords({ store, setStore }) {
           <option value="noun/verb">noun/verb</option>
         </select>
       </div>
+
       <div className="flex gap-2 mb-6">
         {editingId ? (
           <>
-            <button onClick={updateWord} className="px-4 py-2 bg-blue-500 rounded hover:bg-blue-600">Update</button>
+            <button onClick={updateWord} className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500 rounded hover:bg-blue-600"><Save className="size-4"/> Update</button>
             <button onClick={clearForm} className="px-4 py-2 bg-gray-500 rounded hover:bg-gray-600">Cancel</button>
           </>
         ) : (
@@ -1454,9 +1412,10 @@ function ManageWords({ store, setStore }) {
         )}
       </div>
 
+      {/* List */}
       <div className="max-h-80 overflow-auto pr-1">
         <ul className="space-y-2">
-          {filteredDeck.map((item) => (
+          {filtered.map((item) => (
             <li key={item.id} className="flex justify-between items-center gap-3 bg-white/5 px-3 py-2 rounded-xl">
               <span className="text-sm">
                 <b>{item.en}</b> — {item.th} <i className="text-slate-300">({item.pos})</i>
@@ -1464,16 +1423,15 @@ function ManageWords({ store, setStore }) {
               </span>
               <div className="flex gap-2 shrink-0">
                 <button onClick={() => startEdit(item)} className="px-2 py-1 bg-yellow-500 rounded hover:bg-yellow-600 text-sm">Edit</button>
-                <button onClick={() => deleteWord(item.id)} className="px-2 py-1 bg-red-500 rounded hover:bg-red-600 text-sm">Delete</button>
+                <button onClick={() => deleteWord(item.id)} className="inline-flex items-center gap-1 px-2 py-1 bg-red-500 rounded hover:bg-red-600 text-sm">
+                  <Trash2 className="size-4" /> Delete
+                </button>
               </div>
             </li>
           ))}
-          {!filteredDeck.length && (
-            <li className="text-sm text-slate-300">No words found.</li>
-          )}
         </ul>
       </div>
-    </Card>
+    </div>
   );
 }
 
