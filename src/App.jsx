@@ -54,44 +54,72 @@ function usePersistentState(defaults) {
    (also accepts syn/synonyms as fallback)
 =========================== */
 function parseCSV(text) {
-  const t = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const lines = [];
+  // normalize line endings + strip BOM
+  const t = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+  // basic CSV tokenizer with quotes support
+  const rows = [];
   let i = 0, field = "", row = [], inQuotes = false;
   while (i < t.length) {
     const c = t[i];
     if (inQuotes) {
-      if (c === '"') { if (t[i + 1] === '"') { field += '"'; i++; } else { inQuotes = false; } }
-      else { field += c; }
+      if (c === '"') {
+        if (t[i + 1] === '"') { field += '"'; i++; }
+        else { inQuotes = false; }
+      } else {
+        field += c;
+      }
     } else {
       if (c === '"') inQuotes = true;
       else if (c === ",") { row.push(field); field = ""; }
-      else if (c === "\n") { row.push(field); lines.push(row); row = []; field = ""; }
+      else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
       else { field += c; }
     }
     i++;
   }
-  if (field.length || row.length) { row.push(field); lines.push(row); }
-  if (!lines.length) return [];
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  if (!rows.length) return [];
 
-  const header = lines[0].map(h => h.trim().toLowerCase());
+  // headers (case/space tolerant)
+  const header = rows[0].map(h => h.trim().toLowerCase());
+  const findIdx = (names) => names.map(n => header.indexOf(n)).find(x => x !== -1);
+
   const idx = {
-    en: header.indexOf("en"),
-    th: header.indexOf("th"),
-    pos: header.indexOf("pos"),
-    example: header.indexOf("example"),
-    sym: header.indexOf("sym") !== -1 ? header.indexOf("sym")
-        : header.indexOf("syn") !== -1 ? header.indexOf("syn")
-        : header.indexOf("synonyms"),
+    en: findIdx(["en"]),
+    th: findIdx(["th"]),
+    pos: findIdx(["pos","part of speech","part_of_speech"]),
+    example: findIdx(["example","examples","ex","sample"]),
+    // accept many variants for synonyms
+    syn: findIdx(["sym","syn","syn.","synonym","synonyms"]),
   };
+
   if (idx.en === -1 || idx.th === -1) return [];
 
-  return lines.slice(1).map(cols => ({
-    en: (cols[idx.en] ?? "").trim(),
-    th: (cols[idx.th] ?? "").trim(),
-    pos: (idx.pos !== -1 ? cols[idx.pos] : "noun")?.trim() || "noun",
-    example: (idx.example !== -1 ? cols[idx.example] : "")?.trim() || "",
-    syn: (idx.sym !== -1 ? cols[idx.sym] : "")?.trim() || "",
-  })).filter(r => r.en && r.th);
+  // if a row has more cols than headers, merge overflow into the last known column
+  const expectedLen = header.length;
+
+  const out = [];
+  for (let r = 1; r < rows.length; r++) {
+    let cols = rows[r];
+
+    // merge overflow cells into the last header cell (typical when synonyms contain unquoted commas)
+    if (cols.length > expectedLen) {
+      const head = cols.slice(0, expectedLen - 1);
+      const tail = cols.slice(expectedLen - 1).join(",");
+      cols = [...head, tail];
+    }
+
+    const en = (cols[idx.en] ?? "").trim();
+    const th = (cols[idx.th] ?? "").trim();
+    if (!en || !th) continue;
+
+    const pos = (idx.pos != null && idx.pos !== -1 ? cols[idx.pos] : "noun")?.trim() || "noun";
+    const example = (idx.example != null && idx.example !== -1 ? cols[idx.example] : "")?.trim() || "";
+    const syn = (idx.syn != null && idx.syn !== -1 ? cols[idx.syn] : "")?.trim() || "";
+
+    out.push({ en, th, pos, example, syn });
+  }
+  return out;
 }
 
 /* ===========================
