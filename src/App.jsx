@@ -525,7 +525,6 @@ function speak(text, lang = "en-US") {
 }
 
 function Flashcards({ store, setStore, onXP }) {
-  // Due cards: introduced and due today or earlier
   const dueCards = useMemo(
     () =>
       store.deck.filter((c) => {
@@ -538,15 +537,15 @@ function Flashcards({ store, setStore, onXP }) {
   const [idx, setIdx] = useState(0);
   const [show, setShow] = useState(false);
 
-  // Clamp index if the due list shrinks after grading
+  // If the due list changes size, keep idx within bounds on the next render
   useEffect(() => {
-    if (!dueCards.length) { setIdx(0); return; }
-    if (idx > dueCards.length - 1) setIdx(dueCards.length - 1);
+    if (!dueCards.length) { setIdx(0); }
+    else if (idx > dueCards.length - 1) { setIdx(dueCards.length - 1); }
   }, [dueCards.length, idx]);
 
   useEffect(() => { setShow(false); }, [idx]);
 
-  // If nothing due
+  // Nothing due
   if (!dueCards.length) {
     return (
       <Card>
@@ -561,9 +560,13 @@ function Flashcards({ store, setStore, onXP }) {
     );
   }
 
-  const card = dueCards[idx];
-  const leftToday = Math.max(0, dueCards.length - idx); // include current
-  const positionLabel = `${Math.min(idx + 1, dueCards.length)}/${dueCards.length}`;
+  // ✅ SAFE index for this render
+  const safeIdx = Math.max(0, Math.min(idx, dueCards.length - 1));
+  const card = dueCards[safeIdx];
+
+  // Include the current card in the count
+  const leftToday = Math.max(0, dueCards.length - safeIdx);
+  const positionLabel = `${safeIdx + 1}/${dueCards.length}`;
 
   function grade(quality) {
     const prog = store.cards[card.id];
@@ -575,16 +578,11 @@ function Flashcards({ store, setStore, onXP }) {
       wrong: prog.wrong + (quality < 3 ? 1 : 0),
     };
 
-    setStore((s) => ({
-      ...s,
-      cards: { ...s.cards, [card.id]: updated },
-    }));
-
+    setStore((s) => ({ ...s, cards: { ...s.cards, [card.id]: updated } }));
     onXP(quality >= 3 ? 10 : 4);
 
-    // Advance index against the *current* list; the clamp effect above
-    // will correct it if the list shrinks after this update.
-    if (idx < dueCards.length - 1) setIdx(idx + 1);
+    // Move forward; if the list shrinks, the safeIdx logic above keeps us in range
+    if (safeIdx < dueCards.length - 1) setIdx(safeIdx + 1);
     else setIdx(0);
   }
 
@@ -613,26 +611,14 @@ function Flashcards({ store, setStore, onXP }) {
 
           <AnimatePresence>
             {show && (
-              <motion.div
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0 }}
-                className="mt-6 space-y-2"
-              >
+              <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-6 space-y-2">
                 <div className="text-xl">{card.th}</div>
-                {card.example ? (
-                  <div className="text-sm text-slate-300">Example: <i>{card.example}</i></div>
-                ) : null}
-                {card.syn ? (
-                  <div className="text-sm text-emerald-200/90">
-                    <span className="font-semibold">Synonyms:</span> {card.syn}
-                  </div>
-                ) : null}
+                {card.example ? <div className="text-sm text-slate-300">Example: <i>{card.example}</i></div> : null}
+                {card.syn ? <div className="text-sm text-emerald-200/90"><span className="font-semibold">Synonyms:</span> {card.syn}</div> : null}
               </motion.div>
             )}
           </AnimatePresence>
 
-          {/* Controls */}
           <div className="mt-auto pt-6 space-y-3">
             <button
               onClick={() => setShow(true)}
@@ -641,6 +627,7 @@ function Flashcards({ store, setStore, onXP }) {
               Show translation
             </button>
 
+            {/* Always-aligned grading buttons */}
             <div className="grid grid-cols-3 gap-2">
               <button onClick={() => grade(2)} className="w-full rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3">Hard</button>
               <button onClick={() => grade(4)} className="w-full rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-3">Good</button>
