@@ -525,12 +525,12 @@ function speak(text, lang = "en-US") {
 }
 
 function Flashcards({ store, setStore, onXP }) {
-  // Only cards that are introduced and due
+  // Due cards: introduced and due today or earlier
   const dueCards = useMemo(
     () =>
       store.deck.filter((c) => {
-        const prog = store.cards[c.id] ?? {};
-        return !!prog.introduced && (prog.due ?? todayKey()) <= todayKey();
+        const p = store.cards[c.id] ?? {};
+        return !!p.introduced && (p.due ?? todayKey()) <= todayKey();
       }),
     [store.deck, store.cards]
   );
@@ -538,14 +538,15 @@ function Flashcards({ store, setStore, onXP }) {
   const [idx, setIdx] = useState(0);
   const [show, setShow] = useState(false);
 
-  // Clamp index if due list shrinks after grading
+  // Clamp index if the due list shrinks after grading
   useEffect(() => {
     if (!dueCards.length) { setIdx(0); return; }
-    if (idx >= dueCards.length) setIdx(dueCards.length - 1);
-    // hide translation when switching card
-    setShow(false);
+    if (idx > dueCards.length - 1) setIdx(dueCards.length - 1);
   }, [dueCards.length, idx]);
 
+  useEffect(() => { setShow(false); }, [idx]);
+
+  // If nothing due
   if (!dueCards.length) {
     return (
       <Card>
@@ -561,7 +562,8 @@ function Flashcards({ store, setStore, onXP }) {
   }
 
   const card = dueCards[idx];
-  const leftToday = Math.max(0, dueCards.length - (idx + 1)); // remaining after the current card
+  const leftToday = Math.max(0, dueCards.length - idx); // include current
+  const positionLabel = `${Math.min(idx + 1, dueCards.length)}/${dueCards.length}`;
 
   function grade(quality) {
     const prog = store.cards[card.id];
@@ -573,10 +575,15 @@ function Flashcards({ store, setStore, onXP }) {
       wrong: prog.wrong + (quality < 3 ? 1 : 0),
     };
 
-    setStore((s) => ({ ...s, cards: { ...s.cards, [card.id]: updated } }));
+    setStore((s) => ({
+      ...s,
+      cards: { ...s.cards, [card.id]: updated },
+    }));
+
     onXP(quality >= 3 ? 10 : 4);
 
-    // move to next available card; if this card is no longer due, the list will shrink and the clamp effect above will correct the index
+    // Advance index against the *current* list; the clamp effect above
+    // will correct it if the list shrinks after this update.
     if (idx < dueCards.length - 1) setIdx(idx + 1);
     else setIdx(0);
   }
@@ -584,10 +591,10 @@ function Flashcards({ store, setStore, onXP }) {
   return (
     <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2">
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-6 min-h-[60dvh] sm:min-h-[360px] flex flex-col">
+        <div className="rounded-3xl border border-white/10 bg-white/5 p-6 min-h-[60dvh] sm:min-h-[320px] flex flex-col">
           <div className="flex items-center justify-between text-sm text-slate-300">
-            <span>Card {idx + 1}/{dueCards.length}</span>
-            <span className="text-slate-400">Left today: <b>{leftToday}</b></span>
+            <span>Card {positionLabel}</span>
+            <span>Left today: <b>{leftToday}</b></span>
           </div>
 
           <div className="mt-2 text-4xl font-extrabold tracking-tight break-words">{card.en}</div>
@@ -617,46 +624,32 @@ function Flashcards({ store, setStore, onXP }) {
                   <div className="text-sm text-slate-300">Example: <i>{card.example}</i></div>
                 ) : null}
                 {card.syn ? (
-                  <div className="text-sm text-slate-300">Synonyms: <i>{card.syn}</i></div>
+                  <div className="text-sm text-emerald-200/90">
+                    <span className="font-semibold">Synonyms:</span> {card.syn}
+                  </div>
                 ) : null}
               </motion.div>
             )}
           </AnimatePresence>
 
-          {/* Mobile-safe actions: stack vertically on small screens */}
-          <div className="mt-auto pt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
+          {/* Controls */}
+          <div className="mt-auto pt-6 space-y-3">
             <button
               onClick={() => setShow(true)}
-              className="rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-3 w-full sm:w-auto"
+              className="w-full sm:w-auto rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-3 text-center"
             >
               Show translation
             </button>
 
-            <div className="flex gap-2 sm:ml-auto">
-              <button
-                onClick={() => grade(2)}
-                className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3"
-              >
-                Hard
-              </button>
-              <button
-                onClick={() => grade(4)}
-                className="rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-3"
-              >
-                Good
-              </button>
-              <button
-                onClick={() => grade(5)}
-                className="rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-3"
-              >
-                Easy
-              </button>
+            <div className="grid grid-cols-3 gap-2">
+              <button onClick={() => grade(2)} className="w-full rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3">Hard</button>
+              <button onClick={() => grade(4)} className="w-full rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-3">Good</button>
+              <button onClick={() => grade(5)} className="w-full rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-3">Easy</button>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Side stats */}
       <div>
         <Card>
           <div className="text-sm text-slate-400">This word</div>
