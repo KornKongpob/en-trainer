@@ -516,11 +516,51 @@ function QSItem({ icon: Icon, title, desc, onClick }) {
 =========================== */
 function speak(text, lang = "en-US") {
   try {
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = lang;
-    try { u.rate = 0.95; u.pitch = 1.0; } catch {}
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(u);
+    const synth = window.speechSynthesis;
+    if (!synth) return;
+
+    // Best voice picker (prefers Google/Microsoft/iOS natural voices)
+    const pickBestVoice = (voices, lang) => {
+      const v = voices.filter(v => (v.lang || "").toLowerCase().startsWith(lang.toLowerCase()));
+      const byName = (s) => v.find(x => (x.name || "").toLowerCase().includes(s));
+      return (
+        byName("google") ||                        // Chrome: Google US/UK English
+        byName("microsoft") ||                     // Edge: Microsoft Aria/… Online (Natural)
+        v.find(x => /samantha|karen/.test((x.name||"").toLowerCase())) || // iOS
+        v[0] || null
+      );
+    };
+
+    const makeUtterance = () => {
+      const u = new SpeechSynthesisUtterance(String(text));
+      u.lang = lang;
+
+      const voices = synth.getVoices?.() || [];
+      const best = pickBestVoice(voices, lang);
+      if (best) u.voice = best;
+
+      // clearer, more “Google-Translate-like”
+      u.rate = 0.92;
+      u.pitch = 1.0;
+      u.volume = 1.0;
+
+      synth.cancel();
+      synth.speak(u);
+    };
+
+    // some browsers populate voices asynchronously
+    const voicesNow = synth.getVoices?.() || [];
+    if (voicesNow.length) {
+      makeUtterance();
+    } else {
+      const handler = () => {
+        makeUtterance();
+        try { synth.removeEventListener("voiceschanged", handler); } catch {}
+      };
+      synth.addEventListener?.("voiceschanged", handler);
+      // also trigger once in case the list never arrives
+      setTimeout(handler, 400);
+    }
   } catch {}
 }
 
@@ -537,15 +577,14 @@ function Flashcards({ store, setStore, onXP }) {
   const [idx, setIdx] = useState(0);
   const [show, setShow] = useState(false);
 
-  // If the due list changes size, keep idx within bounds on the next render
+  // Clamp index when list changes
   useEffect(() => {
-    if (!dueCards.length) { setIdx(0); }
-    else if (idx > dueCards.length - 1) { setIdx(dueCards.length - 1); }
+    if (!dueCards.length) setIdx(0);
+    else if (idx > dueCards.length - 1) setIdx(dueCards.length - 1);
   }, [dueCards.length, idx]);
 
   useEffect(() => { setShow(false); }, [idx]);
 
-  // Nothing due
   if (!dueCards.length) {
     return (
       <Card>
@@ -560,13 +599,13 @@ function Flashcards({ store, setStore, onXP }) {
     );
   }
 
-  // ✅ SAFE index for this render
-  const safeIdx = Math.max(0, Math.min(idx, dueCards.length - 1));
+  // we always show the "current" card at index 0 for stability
+  const safeIdx = 0;
   const card = dueCards[safeIdx];
 
-  // Include the current card in the count
-  const leftToday = Math.max(0, dueCards.length - safeIdx);
-  const positionLabel = `${safeIdx + 1}/${dueCards.length}`;
+  // Left after you answer this card
+  const leftToday = Math.max(0, dueCards.length - 1);
+  const positionLabel = `${idx + 1}/${dueCards.length}`; // optional; or `${1}/${dueCards.length}` if you prefer
 
   function grade(quality) {
     const prog = store.cards[card.id];
@@ -581,9 +620,8 @@ function Flashcards({ store, setStore, onXP }) {
     setStore((s) => ({ ...s, cards: { ...s.cards, [card.id]: updated } }));
     onXP(quality >= 3 ? 10 : 4);
 
-    // Move forward; if the list shrinks, the safeIdx logic above keeps us in range
-    if (safeIdx < dueCards.length - 1) setIdx(safeIdx + 1);
-    else setIdx(0);
+    // Keep index at 0 so the next card slides into place.
+    setIdx(0);
   }
 
   return (
@@ -627,7 +665,7 @@ function Flashcards({ store, setStore, onXP }) {
               Show translation
             </button>
 
-            {/* Always-aligned grading buttons */}
+            {/* perfectly aligned buttons on mobile */}
             <div className="grid grid-cols-3 gap-2">
               <button onClick={() => grade(2)} className="w-full rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3">Hard</button>
               <button onClick={() => grade(4)} className="w-full rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-3">Good</button>
