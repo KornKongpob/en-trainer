@@ -577,13 +577,19 @@ function Flashcards({ store, setStore, onXP }) {
   const [idx, setIdx] = useState(0);
   const [show, setShow] = useState(false);
 
-  // Clamp index when list changes
+  // Always show the first due card for stability
+  const card = dueCards[0];
+
+  // When the CURRENT CARD changes, hide translation
+  useEffect(() => {
+    setShow(false);
+  }, [card?.id]);
+
+  // If list size changes, keep idx in range (idx is only for the tiny "Card 1/N" label)
   useEffect(() => {
     if (!dueCards.length) setIdx(0);
     else if (idx > dueCards.length - 1) setIdx(dueCards.length - 1);
   }, [dueCards.length, idx]);
-
-  useEffect(() => { setShow(false); }, [idx]);
 
   if (!dueCards.length) {
     return (
@@ -599,13 +605,8 @@ function Flashcards({ store, setStore, onXP }) {
     );
   }
 
-  // we always show the "current" card at index 0 for stability
-  const safeIdx = 0;
-  const card = dueCards[safeIdx];
-
-  // Left after you answer this card
   const leftToday = Math.max(0, dueCards.length - 1);
-  const positionLabel = `${idx + 1}/${dueCards.length}`; // optional; or `${1}/${dueCards.length}` if you prefer
+  const positionLabel = `${idx + 1}/${dueCards.length}`;
 
   function grade(quality) {
     const prog = store.cards[card.id];
@@ -620,7 +621,9 @@ function Flashcards({ store, setStore, onXP }) {
     setStore((s) => ({ ...s, cards: { ...s.cards, [card.id]: updated } }));
     onXP(quality >= 3 ? 10 : 4);
 
-    // Keep index at 0 so the next card slides into place.
+    // IMPORTANT: hide translation for the next card
+    setShow(false);
+    // Keep index at 0 so next card slides into place
     setIdx(0);
   }
 
@@ -649,10 +652,23 @@ function Flashcards({ store, setStore, onXP }) {
 
           <AnimatePresence>
             {show && (
-              <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-6 space-y-2">
+              <motion.div
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="mt-6 space-y-2"
+              >
                 <div className="text-xl">{card.th}</div>
-                {card.example ? <div className="text-sm text-slate-300">Example: <i>{card.example}</i></div> : null}
-                {card.syn ? <div className="text-sm text-emerald-200/90"><span className="font-semibold">Synonyms:</span> {card.syn}</div> : null}
+                {card.example ? (
+                  <div className="text-sm text-slate-300">
+                    Example: <i>{card.example}</i>
+                  </div>
+                ) : null}
+                {card.syn ? (
+                  <div className="text-sm text-emerald-200/90">
+                    <span className="font-semibold">Synonyms:</span> {card.syn}
+                  </div>
+                ) : null}
               </motion.div>
             )}
           </AnimatePresence>
@@ -660,16 +676,22 @@ function Flashcards({ store, setStore, onXP }) {
           <div className="mt-auto pt-6 space-y-3">
             <button
               onClick={() => setShow(true)}
-              className="w-full sm:w-auto rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-3 text-center"
+              disabled={show}
+              className="w-full sm:w-auto rounded-xl bg-emerald-500/20 enabled:hover:bg-emerald-500/30 disabled:opacity-60 px-4 py-3 text-center"
             >
               Show translation
             </button>
 
-            {/* perfectly aligned buttons on mobile */}
             <div className="grid grid-cols-3 gap-2">
-              <button onClick={() => grade(2)} className="w-full rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3">Hard</button>
-              <button onClick={() => grade(4)} className="w-full rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-3">Good</button>
-              <button onClick={() => grade(5)} className="w-full rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-3">Easy</button>
+              <button onClick={() => grade(2)} className="w-full rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3">
+                Hard
+              </button>
+              <button onClick={() => grade(4)} className="w-full rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-3">
+                Good
+              </button>
+              <button onClick={() => grade(5)} className="w-full rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-3">
+                Easy
+              </button>
             </div>
           </div>
         </div>
