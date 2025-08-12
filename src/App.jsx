@@ -525,26 +525,28 @@ function speak(text, lang = "en-US") {
 }
 
 function Flashcards({ store, setStore, onXP }) {
-  const dueCards = useMemo(() =>
-    store.deck.filter((c) => {
-      const prog = store.cards[c.id] ?? {};
-      return !!prog.introduced && (prog.due ?? todayKey()) <= todayKey();
-    }),
+  // Only cards that are introduced and due
+  const dueCards = useMemo(
+    () =>
+      store.deck.filter((c) => {
+        const prog = store.cards[c.id] ?? {};
+        return !!prog.introduced && (prog.due ?? todayKey()) <= todayKey();
+      }),
     [store.deck, store.cards]
   );
 
   const [idx, setIdx] = useState(0);
   const [show, setShow] = useState(false);
-  const totalDue = dueCards.length;
-  const card = dueCards[idx];
 
-  // Clamp index when due list changes (avoid white screen)
+  // Clamp index if due list shrinks after grading
   useEffect(() => {
-    setIdx((i) => Math.min(i, Math.max(dueCards.length - 1, 0)));
+    if (!dueCards.length) { setIdx(0); return; }
+    if (idx >= dueCards.length) setIdx(dueCards.length - 1);
+    // hide translation when switching card
     setShow(false);
-  }, [dueCards.length]);
+  }, [dueCards.length, idx]);
 
-  if (!totalDue) {
+  if (!dueCards.length) {
     return (
       <Card>
         <div className="flex items-center gap-3">
@@ -558,48 +560,39 @@ function Flashcards({ store, setStore, onXP }) {
     );
   }
 
-  function nextIndex() {
-    if (idx + 1 < dueCards.length) setIdx(idx + 1);
-    else setIdx(0);
-  }
+  const card = dueCards[idx];
+  const leftToday = Math.max(0, dueCards.length - (idx + 1)); // remaining after the current card
 
   function grade(quality) {
-    const current = dueCards[idx];
-    if (!current) return;
-    const prog = store.cards[current.id];
+    const prog = store.cards[card.id];
     const next = scheduleNext(prog, quality, store.intervals);
     const updated = {
       ...prog,
       ...next,
       correct: prog.correct + (quality >= 3 ? 1 : 0),
-      wrong: prog.wrong + (quality < 3 ? 1 : 0)
+      wrong: prog.wrong + (quality < 3 ? 1 : 0),
     };
-    setStore((s) => ({ ...s, cards: { ...s.cards, [current.id]: updated } }));
+
+    setStore((s) => ({ ...s, cards: { ...s.cards, [card.id]: updated } }));
     onXP(quality >= 3 ? 10 : 4);
-    nextIndex();
+
+    // move to next available card; if this card is no longer due, the list will shrink and the clamp effect above will correct the index
+    if (idx < dueCards.length - 1) setIdx(idx + 1);
+    else setIdx(0);
   }
-
-  const remaining = Math.max(0, totalDue - idx - 1);
-
-  const synList = (card?.syn || "")
-    .split(",")
-    .map(s => s.trim())
-    .filter(Boolean)
-    .slice(0, 8); // cap a bit for UI
 
   return (
     <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2">
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-6 min-h-[60dvh] sm:min-h-[320px] flex flex-col relative">
-          <div className="text-sm text-slate-300 flex items-center justify-between">
-            <span>Card {Math.min(idx + 1, totalDue)}/{totalDue}</span>
-            <span className="text-xs text-slate-400">Left today: {totalDue - (idx + 1) >= 0 ? totalDue - (idx + 1) : 0}</span>
+        <div className="rounded-3xl border border-white/10 bg-white/5 p-6 min-h-[60dvh] sm:min-h-[360px] flex flex-col">
+          <div className="flex items-center justify-between text-sm text-slate-300">
+            <span>Card {idx + 1}/{dueCards.length}</span>
+            <span className="text-slate-400">Left today: <b>{leftToday}</b></span>
           </div>
 
-          <div className="mt-2 text-4xl font-extrabold tracking-tight pr-28">{card?.en}</div>
-          <div className="text-sm text-slate-400">{card?.pos}</div>
+          <div className="mt-2 text-4xl font-extrabold tracking-tight break-words">{card.en}</div>
+          <div className="text-sm text-slate-400">{card.pos}</div>
 
-          {/* place the button at bottom-left so it won't overlap the grade buttons */}
           {!show && (
             <div className="mt-6">
               <button
@@ -612,45 +605,58 @@ function Flashcards({ store, setStore, onXP }) {
           )}
 
           <AnimatePresence>
-            {show && card && (
-              <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-6">
+            {show && (
+              <motion.div
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0 }}
+                className="mt-6 space-y-2"
+              >
                 <div className="text-xl">{card.th}</div>
-                <div className="text-sm text-slate-300 mt-2">Example: <i>{card.example}</i></div>
-
-                {synList.length > 0 && (
-                  <div className="mt-3">
-                    <div className="text-xs text-slate-400 mb-1">Synonyms</div>
-                    <div className="flex flex-wrap gap-2">
-                      {synList.map((s, i) => (
-                        <span key={i} className="text-xs px-2 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/40">
-                          {s}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                {card.example ? (
+                  <div className="text-sm text-slate-300">Example: <i>{card.example}</i></div>
+                ) : null}
+                {card.syn ? (
+                  <div className="text-sm text-slate-300">Synonyms: <i>{card.syn}</i></div>
+                ) : null}
               </motion.div>
             )}
           </AnimatePresence>
 
-          <div className="mt-auto pt-6 flex flex-wrap gap-2 sticky bottom-0 bg-transparent">
-            {!show && (
+          {/* Mobile-safe actions: stack vertically on small screens */}
+          <div className="mt-auto pt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
+            <button
+              onClick={() => setShow(true)}
+              className="rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-3 w-full sm:w-auto"
+            >
+              Show translation
+            </button>
+
+            <div className="flex gap-2 sm:ml-auto">
               <button
-                onClick={() => setShow(true)}
-                className="rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-2"
+                onClick={() => grade(2)}
+                className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3"
               >
-                Show translation
+                Hard
               </button>
-            )}
-            <div className="ml-auto flex gap-2">
-              <button onClick={() => grade(2)} className="rounded-xl bg-white/10 hover:bg-white/20 px-4 py-2">Hard</button>
-              <button onClick={() => grade(4)} className="rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-2">Good</button>
-              <button onClick={() => grade(5)} className="rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-2">Easy</button>
+              <button
+                onClick={() => grade(4)}
+                className="rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-3"
+              >
+                Good
+              </button>
+              <button
+                onClick={() => grade(5)}
+                className="rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-3"
+              >
+                Easy
+              </button>
             </div>
           </div>
         </div>
       </div>
 
+      {/* Side stats */}
       <div>
         <Card>
           <div className="text-sm text-slate-400">This word</div>
