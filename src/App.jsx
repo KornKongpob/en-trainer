@@ -5,7 +5,7 @@ import {
   Home, Moon, Sparkles, Star, Sun, Trophy, Volume2, Mic, Square, Play
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
-import Quiz from "./tabs/quiz";
+import Quiz from "./tabs/Quiz"; //
 
 /* ===========================
    Small helpers
