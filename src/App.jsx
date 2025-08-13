@@ -5,9 +5,11 @@ import {
   Home, Moon, Sparkles, Star, Sun, Trophy, Volume2, Mic, Square, Play
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
-import Quiz from "./tabs/Quiz";
+import Quiz from "./tabs/quiz";
 
-/* ========== helpers ========== */
+/* ===========================
+   Small helpers
+=========================== */
 const last = (arr) => (Array.isArray(arr) && arr.length ? arr[arr.length - 1] : undefined);
 const classNames = (...a) => a.filter(Boolean).join(" ");
 const toKeyDate = (d = new Date()) => {
@@ -19,20 +21,18 @@ const toKeyDate = (d = new Date()) => {
 const fromKeyDate = (k) => { const [y, m, d] = k.split("-").map(Number); return new Date(y, m - 1, d); };
 const todayKey = () => toKeyDate();
 const nowMs = () => Date.now();
-const minutesMs = (m) => m * 60 * 1000;
-const daysMs = (d) => d * 24 * 60 * 60 * 1000;
+const MS = { min: 60_000, hour: 3_600_000, day: 86_400_000 };
 
-function fmtLeftShort(ms) {
-  if (ms <= 0) return "now";
-  const m = Math.round(ms / 60000);
-  if (m < 60) return `${m}m`;
-  const h = Math.round(m / 60);
-  if (h < 24) return `${h}h`;
-  const d = Math.round(h / 24);
-  return `${d}d`;
+/* Humanize durations like 5m / 2h / 3d */
+function humanizeMs(ms) {
+  if (ms < MS.hour) return `${Math.max(1, Math.round(ms / MS.min))}m`;
+  if (ms < MS.day) return `${Math.max(1, Math.round(ms / MS.hour))}h`;
+  return `${Math.max(1, Math.round(ms / MS.day))}d`;
 }
 
-/* ========== defaults ========== */
+/* ===========================
+   Default data
+=========================== */
 const DEFAULT_DECK = [
   { id: 1, en: "increase", th: "เพิ่มขึ้น", pos: "verb", example: "Prices increase during peak season.", syn: "raise,grow,rise,boost" },
   { id: 2, en: "decrease", th: "ลดลง", pos: "verb", example: "Sales decreased last quarter.", syn: "reduce,drop,decline,lower" },
@@ -46,7 +46,9 @@ const DEFAULT_DECK = [
   { id: 10, en: "confirm", th: "ยืนยัน", pos: "verb", example: "Please confirm the order.", syn: "verify,affirm,validate" },
 ];
 
-/* ========== persistence ========== */
+/* ===========================
+   Persistence
+=========================== */
 const LS_KEY = "th_en_learning_v2";
 function loadState() { try { const raw = localStorage.getItem(LS_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; } }
 function saveState(state) { try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch {} }
@@ -56,7 +58,9 @@ function usePersistentState(defaults) {
   return [state, setState];
 }
 
-/* ========== CSV parser ========== */
+/* ===========================
+   CSV parser
+=========================== */
 function parseCSV(text) {
   const t = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const rows = [];
@@ -64,20 +68,24 @@ function parseCSV(text) {
   while (i < t.length) {
     const c = t[i];
     if (inQuotes) {
-      if (c === '"') { if (t[i + 1] === '"') { field += '"'; i++; } else { inQuotes = false; } }
-      else { field += c; }
+      if (c === '"') {
+        if (t[i + 1] === '"') { field += '"'; i++; }
+        else { inQuotes = false; }
+      } else field += c;
     } else {
       if (c === '"') inQuotes = true;
       else if (c === ",") { row.push(field); field = ""; }
       else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
-      else { field += c; }
+      else field += c;
     }
     i++;
   }
   if (field.length || row.length) { row.push(field); rows.push(row); }
   if (!rows.length) return [];
+
   const header = rows[0].map(h => h.trim().toLowerCase());
   const findIdx = (names) => names.map(n => header.indexOf(n)).find(x => x !== -1);
+
   const idx = {
     en: findIdx(["en"]),
     th: findIdx(["th"]),
@@ -86,6 +94,7 @@ function parseCSV(text) {
     syn: findIdx(["sym","syn","syn.","synonym","synonyms"]),
   };
   if (idx.en === -1 || idx.th === -1) return [];
+
   const expectedLen = header.length;
   const out = [];
   for (let r = 1; r < rows.length; r++) {
@@ -106,82 +115,147 @@ function parseCSV(text) {
   return out;
 }
 
-/* ========== SRS scheduling ========== */
-/** Card progress shape:
- * {
- *   ef: number, interval: number (days), reps: number,
- *   due: "YYYY-MM-DD", dueAt: number(ms), introduced: boolean, introducedOn: "YYYY-MM-DD" | null,
- *   correct: number, wrong: number, lastReviewedAt?: number
- * }
- */
+/* ===========================
+   SRS scheduling
+   - Adds dueAt (ms) so minutes work correctly.
+   - Keeps legacy 'due' (YYYY-MM-DD) for compatibility.
+=========================== */
 const initCardProgress = (deck) => Object.fromEntries(
   deck.map((c) => [c.id, {
     ef: 2.5,
-    interval: 0,            // last interval in days (>=0)
-    due: todayKey(),        // legacy (date key)
-    dueAt: nowMs(),         // new precise due time
+    interval: 0,         // days (SM-2)
+    due: todayKey(),     // legacy (by day)
+    dueAt: nowMs(),      // precise timestamp
     correct: 0,
     wrong: 0,
     reps: 0,
     introduced: false,
     introducedOn: null,
-    lastReviewedAt: null,
   }])
 );
 
-/** Flexible scheduler:
- * Day 1 => fixed (settings.day1)
- * Later => EF + Ebbinghaus retention target (settings.curve)
- * quality: 2=hard, 4=good, 5=easy
- */
-function scheduleNext(progress, quality, settings) {
-  const { day1, curve } = settings;
-  const isToday = progress.introducedOn && progress.introducedOn === todayKey();
-
-  // --- Day 1 fixed schedule (minute/day mix) ---
-  if (isToday) {
-    let addMs = minutesMs(day1.hardMinutes);
-    if (quality >= 4) {
-      addMs = daysMs(quality >= 5 ? day1.easyDays : day1.goodDays);
-    }
-    const nextDueAt = nowMs() + addMs;
-    return {
-      ef: progress.ef,                       // EF unchanged on the very first day
-      interval: Math.max(0, Math.round(addMs / daysMs(1))), // store an approximate day interval
-      reps: quality >= 3 ? Math.max(progress.reps, 1) : 0,  // start reps after first correct-ish
-      due: toKeyDate(new Date(nextDueAt)),
-      dueAt: nextDueAt,
-      lastReviewedAt: nowMs(),
-    };
-  }
-
-  // --- Later: EF update like SM-2 ---
-  let { ef = 2.5, interval = 0, reps = 0 } = progress;
+/* SM-2 step (returns next interval days + next EF/reps) */
+function sm2Step(progress, quality, baseIntervals) {
+  let { ef, interval, reps = 0 } = progress;
+  // EF update (SM-2)
   ef = Math.max(1.3, ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)));
 
-  // Ebbinghaus: R = exp(-t/S). Pick target R by quality, compute next t = -S ln(R)
-  // Stability S grows with EF and reps
-  const S = Math.max(1, ef * (1 + Math.min(4, reps) * 0.15)); // days
-  const Rtgt = quality >= 5 ? curve.easyR : quality >= 4 ? curve.goodR : curve.hardR;
-  let nextDays = Math.round(-S * Math.log(Math.max(0.05, Math.min(0.95, Rtgt)))); // clamp R
+  if (quality < 3) {
+    interval = Math.max(1, Number(baseIntervals?.hard ?? 1));
+    reps = 0;
+  } else if (reps === 0) {
+    interval = Math.max(1, Number(baseIntervals?.good ?? 2));
+    reps = 1;
+  } else if (reps === 1) {
+    interval = Math.max(interval, Number(baseIntervals?.easy ?? 3));
+    reps = 2;
+  } else {
+    const qMul = quality >= 5 ? 1.25 : 1.0;
+    interval = Math.max(1, Math.round(interval * ef * qMul));
+    reps += 1;
+  }
+  return { ef, interval, reps };
+}
 
-  // Guardrails relative to previous interval
-  if (quality >= 5) nextDays = Math.max(nextDays, Math.round(interval * 1.25));
-  else if (quality >= 4) nextDays = Math.max(nextDays, Math.max(1, Math.round(interval * 1.0)));
-  else nextDays = Math.max(1, Math.min(nextDays, Math.max(1, Math.round(interval * 0.5))));
+/* Compute scheduling given a "grade" including Day-1 rules and "Again" */
+function computeNext(progress, grade, settings) {
+  const { intervals, day1 } = settings;
+  const isDay1 = progress.introducedOn === todayKey();
 
-  const nextDueAt = nowMs() + daysMs(nextDays);
+  // Defaults
+  let next = { ef: progress.ef, interval: progress.interval, reps: progress.reps };
+  let deltaMs = 0;
+
+  if (grade === "again") {
+    // Always minutes; drop step a bit
+    const againMins = Math.max(1, Number(day1?.againMins ?? 5));
+    deltaMs = againMins * MS.min;
+    next.reps = Math.max(0, progress.reps - 1);
+    next.ef = Math.max(1.3, progress.ef - 0.15);
+    next.interval = 0; // for display
+  } else if (isDay1) {
+    // Day-1 custom timings
+    if (grade === "hard") {
+      const mins = Math.max(1, Number(day1?.hardMins ?? 10));
+      deltaMs = mins * MS.min;
+      next.reps = 0;
+      next.ef = Math.max(1.3, progress.ef - 0.05);
+      next.interval = 0;
+    } else if (grade === "good") {
+      const days = Math.max(1, Number(day1?.goodDays ?? 1));
+      deltaMs = days * MS.day;
+      next = { ...next, ...sm2Step(progress, 4, intervals) };
+    } else if (grade === "easy") {
+      const days = Math.max(1, Number(day1?.easyDays ?? 2));
+      deltaMs = days * MS.day;
+      next = { ...next, ...sm2Step(progress, 5, intervals) };
+    }
+  } else {
+    // Post Day-1 (regular SM-2); hard/good/easy follow EF; again = short minutes
+    if (grade === "hard") {
+      next = { ...next, ...sm2Step(progress, 2, intervals) };
+      deltaMs = Math.max(1, next.interval) * MS.day;
+    } else if (grade === "good") {
+      next = { ...next, ...sm2Step(progress, 4, intervals) };
+      deltaMs = Math.max(1, next.interval) * MS.day;
+    } else if (grade === "easy") {
+      next = { ...next, ...sm2Step(progress, 5, intervals) };
+      deltaMs = Math.max(1, next.interval) * MS.day;
+    }
+  }
+
+  // Compute dueAt and due (day string)
+  const dueAt = nowMs() + (deltaMs || MS.day);
+  const dayDate = new Date(dueAt);
   return {
-    ef,
-    interval: nextDays,
-    reps: quality < 3 ? 0 : reps + 1,
-    due: toKeyDate(new Date(nextDueAt)),
-    dueAt: nextDueAt,
-    lastReviewedAt: nowMs(),
+    ...next,
+    dueAt,
+    due: toKeyDate(dayDate),
   };
 }
 
-/* ========== App ========== */
+/* Preview label for buttons (non-mutating) */
+function previewLabel(progress, grade, settings) {
+  const simulated = computeNext(progress, grade, settings);
+  const delta = Math.max(1, simulated.dueAt - nowMs());
+  return humanizeMs(delta);
+}
+
+/* ===========================
+   TTS helper (better voices + settings)
+=========================== */
+function pickBestVoice(voices, lang, preferredName) {
+  const list = voices.filter(v => (v.lang || "").toLowerCase().startsWith(lang.toLowerCase()));
+  if (!list.length) return null;
+  if (preferredName) {
+    const exact = list.find(v => (v.name || "") === preferredName);
+    if (exact) return exact;
+    const part = list.find(v => (v.name || "").toLowerCase().includes(preferredName.toLowerCase()));
+    if (part) return part;
+  }
+  const byName = (s) => list.find(x => (x.name || "").toLowerCase().includes(s));
+  return byName("google") || byName("microsoft") || list[0] || null;
+}
+function ttsSpeak(text, lang, tts) {
+  try {
+    const synth = window.speechSynthesis;
+    if (!synth) return;
+    const u = new SpeechSynthesisUtterance(String(text));
+    u.lang = lang;
+    const voices = synth.getVoices?.() || [];
+    const prefName = lang.startsWith("th") ? tts?.thVoice : tts?.enVoice;
+    const best = pickBestVoice(voices, lang, prefName);
+    if (best) u.voice = best;
+    u.rate = Number(tts?.rate ?? 0.92);
+    u.pitch = Number(tts?.pitch ?? 1.0);
+    u.volume = Number(tts?.volume ?? 1.0);
+    synth.cancel(); synth.speak(u);
+  } catch {}
+}
+
+/* ===========================
+   App
+=========================== */
 export default function App() {
   const [store, setStore] = usePersistentState({
     theme: "dark",
@@ -193,39 +267,39 @@ export default function App() {
     lastActive: null,
     calendar: {},
     quizHistory: [],
-    // Day 1 settings (editable)
-    day1: { hardMinutes: 10, goodDays: 1, easyDays: 2 },
-    // Forgetting-curve retention targets (advanced; lower => longer interval)
-    curve: { hardR: 0.8, goodR: 0.6, easyR: 0.4 },
+    intervals: { easy: 3, good: 2, hard: 1 }, // base days for SM-2
     dailyNew: 10,
+    day1: { againMins: 5, hardMins: 10, goodDays: 1, easyDays: 2 },
+    tts: {
+      enVoice: "", thVoice: "",
+      rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false
+    }
   });
 
   // Patch older saves to include new keys
   useEffect(() => {
     setStore((s) => {
       const patched = { ...s };
-
-      if (!patched.day1) patched.day1 = { hardMinutes: 10, goodDays: 1, easyDays: 2 };
-      if (!patched.curve) patched.curve = { hardR: 0.8, goodR: 0.6, easyR: 0.4 };
+      if (!patched.intervals) patched.intervals = { easy: 3, good: 2, hard: 1 };
       if (typeof patched.dailyNew !== "number") patched.dailyNew = 10;
+      if (!patched.day1) patched.day1 = { againMins: 5, hardMins: 10, goodDays: 1, easyDays: 2 };
+      if (!patched.tts) patched.tts = { enVoice: "", thVoice: "", rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false };
 
       const cards = { ...(patched.cards || {}) };
-      Object.keys(cards).forEach((id) => {
-        const c = { ef: 2.5, interval: 0, reps: 0, due: todayKey(), introduced: false, introducedOn: null, ...cards[id] };
-        // add precise dueAt if missing
-        if (typeof c.dueAt !== "number") {
-          const d = c.due ? new Date(c.due) : new Date();
-          // set dueAt to start of that day (or now)
-          c.dueAt = isNaN(d.getTime()) ? nowMs() : d.getTime();
-        }
-        if (typeof c.correct !== "number") c.correct = 0;
-        if (typeof c.wrong !== "number") c.wrong = 0;
-        if (typeof c.lastReviewedAt !== "number") c.lastReviewedAt = null;
+      Object.keys(cards || {}).forEach((id) => {
+        const c = cards[id] || {};
+        if (typeof c.reps !== "number") c.reps = 0;
+        if (typeof c.ef !== "number") c.ef = 2.5;
+        if (typeof c.interval !== "number") c.interval = 0;
+        if (!c.due) c.due = todayKey();
+        if (typeof c.dueAt !== "number") c.dueAt = nowMs(); // add precise timer
+        if (typeof c.introduced !== "boolean") c.introduced = false;
+        if (!("introducedOn" in c)) c.introducedOn = null;
         cards[id] = c;
       });
       patched.cards = cards;
 
-      // ensure syn exists
+      // Ensure each deck item has syn field
       patched.deck = (patched.deck || []).map(d => ({ syn: "", ...d }));
       return patched;
     });
@@ -238,7 +312,7 @@ export default function App() {
     if (store.lastActive === today) return;
     if (!store.lastActive) { setStore((s) => ({ ...s, lastActive: today })); return; }
     const lastD = fromKeyDate(store.lastActive), nowD = fromKeyDate(today);
-    const diff = Math.round((nowD - lastD) / (1000 * 60 * 60 * 24));
+    const diff = Math.round((nowD - lastD) / MS.day);
     setStore((s) => ({ ...s, lastActive: today, streak: diff === 1 ? s.streak + 1 : diff === 0 ? s.streak : 1 }));
   }, []); // mount only
 
@@ -248,7 +322,7 @@ export default function App() {
     if (store.theme === "dark") root.classList.add("dark"); else root.classList.remove("dark");
   }, [store.theme]);
 
-  // Daily introduction of new words (set dueAt precisely)
+  // Daily introduction of new words
   useEffect(() => {
     const today = todayKey();
     const introducedToday = Object.values(store.cards || {}).filter(c => c.introducedOn === today).length;
@@ -265,7 +339,7 @@ export default function App() {
             introduced: true,
             introducedOn: today,
             due: today,
-            dueAt: nowMs(), // ready right away on day 1
+            dueAt: nowMs(), // ready now
             interval: 0,
             reps: 0,
           };
@@ -310,7 +384,12 @@ export default function App() {
           )}
           {tab === "quiz" && (
             <motion.div key="quiz" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-              <Quiz store={store} setStore={setStore} onXP={addXP} />
+              <Quiz
+                store={store}
+                setStore={setStore}
+                onXP={addXP}
+                ttsSpeak={(text, lang) => ttsSpeak(text, lang, store.tts)}
+              />
             </motion.div>
           )}
           {tab === "listen" && (
@@ -331,7 +410,9 @@ export default function App() {
   );
 }
 
-/* ========== UI bits ========== */
+/* ===========================
+   UI Bits
+=========================== */
 function Decor() {
   return (
     <div aria-hidden className="pointer-events-none fixed inset-0 overflow-hidden">
@@ -543,37 +624,30 @@ function QSItem({ icon: Icon, title, desc, onClick }) {
   );
 }
 
-/* ========== TTS helper ========== */
-function speak(text, lang = "en-US") {
-  try {
-    const synth = window.speechSynthesis;
-    if (!synth) return;
-    const u = new SpeechSynthesisUtterance(String(text));
-    u.lang = lang;
-    u.rate = 0.92; u.pitch = 1.0; u.volume = 1.0;
-    synth.cancel(); synth.speak(u);
-  } catch {}
-}
-
-/* ========== Flashcards (uses dueAt & new scheduler) ========== */
+/* ===========================
+   Flashcards  (Again + previews + minutes scheduling)
+=========================== */
 function Flashcards({ store, setStore, onXP }) {
   const dueCards = useMemo(
     () =>
       store.deck.filter((c) => {
         const p = store.cards[c.id] ?? {};
-        const dueAt = typeof p.dueAt === "number" ? p.dueAt : new Date(p.due ?? todayKey()).getTime();
-        return !!p.introduced && dueAt <= nowMs();
+        if (!p.introduced) return false;
+        if (typeof p.dueAt === "number") return p.dueAt <= nowMs();
+        return (p.due ?? todayKey()) <= todayKey();
       }),
     [store.deck, store.cards]
   );
 
   const [idx, setIdx] = useState(0);
-  const safeIdx = 0; // always show the first due card
+  const safeIdx = 0;
   const card = dueCards[safeIdx];
   const [show, setShow] = useState(false);
 
+  // Reset translation when card changes
   useEffect(() => { setShow(false); }, [card?.id]);
 
+  // Clamp index when list changes
   useEffect(() => {
     if (!dueCards.length) setIdx(0);
     else if (idx > dueCards.length - 1) setIdx(dueCards.length - 1);
@@ -585,7 +659,7 @@ function Flashcards({ store, setStore, onXP }) {
         <div className="flex items-center gap-3">
           <CheckCircle2 className="size-6 text-emerald-400" />
           <div>
-            <div className="font-semibold">All caught up for now</div>
+            <div className="font-semibold">All caught up for today</div>
             <div className="text-slate-300 text-sm">Come back later or add new words.</div>
           </div>
         </div>
@@ -593,34 +667,44 @@ function Flashcards({ store, setStore, onXP }) {
     );
   }
 
-  const prog = store.cards[card.id] ?? {};
-  const msLeft = (prog.dueAt ?? nowMs()) - nowMs();
+  const leftCount = Math.max(0, dueCards.length - 1);
+  const positionLabel = `${Math.min(idx + 1, dueCards.length)}/${dueCards.length}`;
+  const prog = store.cards[card.id];
 
-  function grade(quality) {
-    if (!card) return;
-    const prev = store.cards[card.id];
-    const next = scheduleNext(prev, quality, { day1: store.day1, curve: store.curve });
+  function applyGrade(grade) {
+    const next = computeNext(prog, grade, { intervals: store.intervals, day1: store.day1 });
     const updated = {
-      ...prev,
+      ...prog,
       ...next,
-      correct: prev.correct + (quality >= 3 ? 1 : 0),
-      wrong: prev.wrong + (quality < 3 ? 1 : 0),
+      correct: prog.correct + (grade === "good" || grade === "easy" ? 1 : 0),
+      wrong: prog.wrong + (grade === "again" || grade === "hard" ? 1 : 0),
     };
-
     setStore((s) => ({ ...s, cards: { ...s.cards, [card.id]: updated } }));
-    onXP(quality >= 3 ? 10 : 4);
-
+    onXP(grade === "good" || grade === "easy" ? 10 : 4);
     setShow(false);
     setIdx(0);
   }
+
+  // Previews for button labels
+  const lblAgain = previewLabel(prog, "again", { intervals: store.intervals, day1: store.day1 });
+  const lblHard  = previewLabel(prog, "hard",  { intervals: store.intervals, day1: store.day1 });
+  const lblGood  = previewLabel(prog, "good",  { intervals: store.intervals, day1: store.day1 });
+  const lblEasy  = previewLabel(prog, "easy",  { intervals: store.intervals, day1: store.day1 });
+
+  // "Due in" display
+  const dueInText = (() => {
+    const delta = Math.max(0, (prog?.dueAt ?? nowMs()) - nowMs());
+    const val = delta ? humanizeMs(delta) : "0m";
+    return val;
+  })();
 
   return (
     <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2">
         <div className="rounded-3xl border border-white/10 bg-white/5 p-6 min-h-[60dvh] sm:min-h-[320px] flex flex-col">
           <div className="flex items-center justify-between text-sm text-slate-300">
-            <span>Card {Math.min(idx + 1, dueCards.length)}/{dueCards.length}</span>
-            <span>Next in: <b>{fmtLeftShort(msLeft)}</b></span>
+            <span>Card {positionLabel}</span>
+            <span>Left in queue now: <b>{leftCount}</b></span>
           </div>
 
           <div className="mt-2 text-4xl font-extrabold tracking-tight break-words">{card.en}</div>
@@ -629,7 +713,7 @@ function Flashcards({ store, setStore, onXP }) {
           {!show && (
             <div className="mt-6">
               <button
-                onClick={() => speak(card.en, "en-US")}
+                onClick={() => ttsSpeak(card.en, "en-US", store.tts)}
                 className="inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm"
               >
                 <Volume2 className="size-4" /> Listen (EN)
@@ -655,10 +739,15 @@ function Flashcards({ store, setStore, onXP }) {
               Show translation
             </button>
 
-            <div className="grid grid-cols-3 gap-2">
-              <button onClick={() => grade(2)} className="w-full rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3">Hard</button>
-              <button onClick={() => grade(4)} className="w-full rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-3">Good</button>
-              <button onClick={() => grade(5)} className="w-full rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-3">Easy</button>
+            <div className="grid grid-cols-4 gap-2">
+              <button onClick={() => applyGrade("again")} className="w-full rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3">Again ({lblAgain})</button>
+              <button onClick={() => applyGrade("hard")}  className="w-full rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3">Hard ({lblHard})</button>
+              <button onClick={() => applyGrade("good")}  className="w-full rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-3">Good ({lblGood})</button>
+              <button onClick={() => applyGrade("easy")}  className="w-full rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-3">Easy ({lblEasy})</button>
+            </div>
+
+            <div className="text-xs text-slate-400 pt-1">
+              Next due for this card: <b>{dueInText}</b>
             </div>
           </div>
         </div>
@@ -670,15 +759,15 @@ function Flashcards({ store, setStore, onXP }) {
           <div className="mt-2 grid grid-cols-3 gap-2 text-center">
             <div className="rounded-xl bg-white/5 p-3">
               <div className="text-xs text-slate-400">Correct</div>
-              <div className="text-xl font-bold">{prog.correct ?? 0}</div>
+              <div className="text-xl font-bold">{store.cards[card.id]?.correct ?? 0}</div>
             </div>
             <div className="rounded-xl bg-white/5 p-3">
               <div className="text-xs text-slate-400">Wrong</div>
-              <div className="text-xl font-bold">{prog.wrong ?? 0}</div>
+              <div className="text-xl font-bold">{store.cards[card.id]?.wrong ?? 0}</div>
             </div>
             <div className="rounded-xl bg-white/5 p-3">
-              <div className="text-xs text-slate-400">Due</div>
-              <div className="text-xl font-bold">{fmtLeftShort(msLeft)}</div>
+              <div className="text-xs text-slate-400">EF</div>
+              <div className="text-xl font-bold">{(store.cards[card.id]?.ef ?? 2.5).toFixed(2)}</div>
             </div>
           </div>
         </Card>
@@ -687,7 +776,9 @@ function Flashcards({ store, setStore, onXP }) {
   );
 }
 
-/* ========== Progress ========== */
+/* ===========================
+   Progress Summary
+=========================== */
 function ProgressSection({ store }) {
   const days = Object.keys(store.calendar).sort();
   const totalXP = days.reduce((sum, k) => sum + (store.calendar[k] || 0), 0);
@@ -705,7 +796,9 @@ function ProgressSection({ store }) {
   );
 }
 
-/* ========== Listening Lab (unchanged) ========== */
+/* ===========================
+   Listening Lab (uses improved TTS)
+=========================== */
 function ListeningLab({ store, onXP }) {
   const [source, setSource] = useState("deck");
   const firstId = store.deck[0]?.id ?? null;
@@ -732,19 +825,15 @@ function ListeningLab({ store, onXP }) {
     return card?.en ?? "";
   }, [source, customText, store.deck, selectedId]);
 
-  function normalize(s) {
-    return s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
-  }
+  function normalize(s) { return s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim(); }
   function levenshtein(a, b) {
     const m = a.length, n = b.length;
     const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
     for (let i = 0; i <= m; i++) dp[i][0] = i;
     for (let j = 0; j <= n; j++) dp[0][j] = j;
-    for (let i = 1; i <= m; i++) {
-      for (let j = 1; j <= n; j++) {
-        const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-        dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
-      }
+    for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
     }
     return dp[m][n];
   }
@@ -774,14 +863,11 @@ function ListeningLab({ store, onXP }) {
       };
       rec.start();
       setRecording(true);
-    } catch (e) {
+    } catch {
       alert("Microphone not available.");
     }
   }
-  function stopRecording() {
-    try { recorderRef.current && recorderRef.current.stop(); } catch {}
-    setRecording(false);
-  }
+  function stopRecording() { try { recorderRef.current && recorderRef.current.stop(); } catch {} setRecording(false); }
 
   function sttOnce() {
     if (!supportsSTT) return;
@@ -827,9 +913,7 @@ function ListeningLab({ store, onXP }) {
                 value={selectedId ?? ""}
                 onChange={(e)=>setSelectedId(Number(e.target.value))}
               >
-                {store.deck.map((d)=>(
-                  <option key={d.id} value={d.id}>{d.en} — {d.th}</option>
-                ))}
+                {store.deck.map((d)=>(<option key={d.id} value={d.id}>{d.en} — {d.th}</option>))}
               </select>
             </div>
           ) : (
@@ -846,7 +930,7 @@ function ListeningLab({ store, onXP }) {
           )}
 
           <div className="mt-4 flex flex-wrap gap-2">
-            <button onClick={()=> speak(expected || "", "en-US")} className="inline-flex items-center gap-2 rounded bg-white/10 px-3 py-2 hover:bg-white/20">
+            <button onClick={()=> ttsSpeak(expected || "", "en-US", store.tts)} className="inline-flex items-center gap-2 rounded bg-white/10 px-3 py-2 hover:bg-white/20">
               <Volume2 className="size-4" /> Play TTS
             </button>
 
@@ -913,19 +997,25 @@ function ListeningLab({ store, onXP }) {
   );
 }
 
-/* ========== Settings ========== */
+/* ===========================
+   Settings (General / Import CSV / Manage / Audio TTS / Day-1)
+=========================== */
 function Settings({ store, setStore }) {
-  const [tab, setTab] = useState("general"); // general | import | manage
+  const [tab, setTab] = useState("general"); // general | import | manage | audio | day1
   return (
     <Card>
       <div className="text-lg font-bold mb-4">Settings</div>
-      <div className="flex gap-2 mb-4">
+      <div className="flex gap-2 mb-4 flex-wrap">
         <button onClick={()=>setTab("general")} className={classNames("px-3 py-2 rounded", tab==="general"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>General</button>
+        <button onClick={()=>setTab("day1")} className={classNames("px-3 py-2 rounded", tab==="day1"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Day-1 timings</button>
+        <button onClick={()=>setTab("audio")} className={classNames("px-3 py-2 rounded", tab==="audio"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Audio / TTS</button>
         <button onClick={()=>setTab("import")} className={classNames("px-3 py-2 rounded", tab==="import"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Import CSV</button>
         <button onClick={()=>setTab("manage")} className={classNames("px-3 py-2 rounded", tab==="manage"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Manage Words</button>
       </div>
 
       {tab === "general" && <GeneralSettings store={store} setStore={setStore} />}
+      {tab === "day1" && <Day1Settings store={store} setStore={setStore} />}
+      {tab === "audio" && <AudioSettings store={store} setStore={setStore} />}
       {tab === "import" && <ContentManager store={store} setStore={setStore} />}
       {tab === "manage" && <ManageWords store={store} setStore={setStore} />}
     </Card>
@@ -934,36 +1024,25 @@ function Settings({ store, setStore }) {
 
 function GeneralSettings({ store, setStore }) {
   const [goal, setGoal] = useState(store.goal);
+  const [easyInt, setEasyInt] = useState(store.intervals?.easy ?? 3);
+  const [goodInt, setGoodInt] = useState(store.intervals?.good ?? 2);
+  const [hardInt, setHardInt] = useState(store.intervals?.hard ?? 1);
   const [dailyNew, setDailyNew] = useState(store.dailyNew ?? 10);
 
-  // Day 1
-  const [day1HardMin, setDay1HardMin] = useState(store.day1?.hardMinutes ?? 10);
-  const [day1GoodDays, setDay1GoodDays] = useState(store.day1?.goodDays ?? 1);
-  const [day1EasyDays, setDay1EasyDays] = useState(store.day1?.easyDays ?? 2);
-
-  // Curve targets
-  const [hardR, setHardR] = useState(store.curve?.hardR ?? 0.8);
-  const [goodR, setGoodR] = useState(store.curve?.goodR ?? 0.6);
-  const [easyR, setEasyR] = useState(store.curve?.easyR ?? 0.4);
-
   function saveSettings() {
-    setStore((s) => ({
-      ...s,
-      goal: Number(goal),
-      dailyNew: Number(dailyNew),
-      day1: { hardMinutes: Number(day1HardMin), goodDays: Number(day1GoodDays), easyDays: Number(day1EasyDays) },
-      curve: { hardR: Number(hardR), goodR: Number(goodR), easyR: Number(easyR) },
-    }));
+    setStore((s) => ({ ...s, goal: Number(goal), intervals: { easy: Number(easyInt), good: Number(goodInt), hard: Number(hardInt) }, dailyNew: Number(dailyNew) }));
   }
 
-  function recomputeAll() {
-    // soft "recompute": push all introduced cards as if graded "good" now, using new params
+  function rescheduleAll() {
     const cards = { ...store.cards };
     Object.keys(cards).forEach((id) => {
       const c = cards[id];
       if (!c.introduced) return;
-      const next = scheduleNext(c, 4, { day1: { hardMinutes: day1HardMin, goodDays: day1GoodDays, easyDays: day1EasyDays }, curve: { hardR, goodR, easyR } });
-      cards[id] = { ...c, due: next.due, dueAt: next.dueAt, interval: next.interval, ef: next.ef, reps: Math.max(c.reps, next.reps) };
+      // Recompute with "good" as baseline
+      const sim = sm2Step(c, 4, { easy: Number(easyInt), good: Number(goodInt), hard: Number(hardInt) });
+      const deltaMs = Math.max(1, sim.interval) * MS.day;
+      const dueAt = nowMs() + deltaMs;
+      cards[id] = { ...c, due: toKeyDate(new Date(dueAt)), dueAt, interval: sim.interval, ef: sim.ef, reps: Math.max(c.reps, sim.reps) };
     });
     setStore((s) => ({ ...s, cards }));
   }
@@ -978,19 +1057,19 @@ function GeneralSettings({ store, setStore }) {
       />
 
       <div className="mb-4">
-        <div className="text-sm mb-1 font-semibold">Day 1 review intervals</div>
-        <div className="flex flex-wrap gap-4">
-          <label className="flex items-center gap-2">Hard:
-            <input type="number" min={1} value={day1HardMin} onChange={(e) => setDay1HardMin(e.target.value)} className="w-24 rounded p-1 bg-white text-black" /> <span className="text-sm">minutes</span>
+        <div className="text-sm mb-1">Base review intervals (days)</div>
+        <div className="flex flex-wrap gap-3 mb-2">
+          <label className="flex items-center gap-2">Easy:
+            <input type="number" min={1} value={easyInt} onChange={(e) => setEasyInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
           </label>
           <label className="flex items-center gap-2">Good:
-            <input type="number" min={1} value={day1GoodDays} onChange={(e) => setDay1GoodDays(e.target.value)} className="w-20 rounded p-1 bg-white text-black" /> <span className="text-sm">days</span>
+            <input type="number" min={1} value={goodInt} onChange={(e) => setGoodInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
           </label>
-          <label className="flex items-center gap-2">Easy:
-            <input type="number" min={1} value={day1EasyDays} onChange={(e) => setDay1EasyDays(e.target.value)} className="w-20 rounded p-1 bg-white text-black" /> <span className="text-sm">days</span>
+          <label className="flex items-center gap-2">Hard:
+            <input type="number" min={1} value={hardInt} onChange={(e) => setHardInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
           </label>
         </div>
-        <div className="text-xs text-slate-300 mt-1">Example: Hard 10m, Good 1d, Easy 2d on the first day you see a word.</div>
+        <div className="text-xs text-slate-300">These affect SM-2 after Day-1. EF adapts spacing over time.</div>
       </div>
 
       <div className="mb-4">
@@ -1000,35 +1079,125 @@ function GeneralSettings({ store, setStore }) {
           onChange={(e) => setDailyNew(e.target.value)}
           className="w-32 rounded p-2 bg-white text-black"
         />
+        <div className="text-xs text-slate-300 mt-1">Each day up to this many unintroduced words will enter the review queue.</div>
       </div>
-
-      <details className="mb-4">
-        <summary className="cursor-pointer text-sm text-slate-300">Advanced: Forgetting curve targets</summary>
-        <div className="mt-2 text-sm">
-          <div className="text-xs text-slate-400 mb-1">Lower target retention ⇒ longer next interval.</div>
-          <div className="flex flex-wrap gap-4">
-            <label className="flex items-center gap-2">Hard R:
-              <input type="number" step="0.05" min="0.2" max="0.95" value={hardR} onChange={(e)=>setHardR(e.target.value)} className="w-24 rounded p-1 bg-white text-black" />
-            </label>
-            <label className="flex items-center gap-2">Good R:
-              <input type="number" step="0.05" min="0.2" max="0.95" value={goodR} onChange={(e)=>setGoodR(e.target.value)} className="w-24 rounded p-1 bg-white text-black" />
-            </label>
-            <label className="flex items-center gap-2">Easy R:
-              <input type="number" step="0.05" min="0.2" max="0.95" value={easyR} onChange={(e)=>setEasyR(e.target.value)} className="w-24 rounded p-1 bg-white text-black" />
-            </label>
-          </div>
-        </div>
-      </details>
 
       <div className="flex gap-2 mt-2">
         <button onClick={saveSettings} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save</button>
-        <button onClick={recomputeAll} className="rounded bg-white/10 border border-white/20 px-4 py-2 hover:bg-white/20">Recompute schedules</button>
+        <button onClick={rescheduleAll} className="rounded bg-white/10 border border-white/20 px-4 py-2 hover:bg-white/20">Recompute schedules</button>
       </div>
     </>
   );
 }
 
-/* ========== CSV Import (unchanged except new cards get dueAt) ========== */
+function Day1Settings({ store, setStore }) {
+  const [againMins, setAgainMins] = useState(store.day1?.againMins ?? 5);
+  const [hardMins, setHardMins] = useState(store.day1?.hardMins ?? 10);
+  const [goodDays, setGoodDays] = useState(store.day1?.goodDays ?? 1);
+  const [easyDays, setEasyDays] = useState(store.day1?.easyDays ?? 2);
+
+  function save() {
+    setStore((s) => ({ ...s, day1: {
+      againMins: Number(againMins),
+      hardMins: Number(hardMins),
+      goodDays: Number(goodDays),
+      easyDays: Number(easyDays),
+    }}));
+  }
+
+  return (
+    <>
+      <div className="text-sm mb-2">Day-1 timings (when you first learn a word)</div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label className="flex items-center gap-2">Again (minutes)
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={againMins} onChange={(e)=>setAgainMins(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-2">Hard (minutes)
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={hardMins} onChange={(e)=>setHardMins(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-2">Good (days)
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={goodDays} onChange={(e)=>setGoodDays(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-2">Easy (days)
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={easyDays} onChange={(e)=>setEasyDays(e.target.value)} />
+        </label>
+      </div>
+      <div className="text-xs text-slate-300 mt-2">After Day-1, spacing follows your performance (SM-2 / Ebbinghaus-like curve). “Again” always brings the card back in minutes and reduces the step a bit.</div>
+      <div className="mt-3">
+        <button onClick={save} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save Day-1 timings</button>
+      </div>
+    </>
+  );
+}
+
+function AudioSettings({ store, setStore }) {
+  const [voices, setVoices] = useState([]);
+  const [enVoice, setEnVoice] = useState(store.tts?.enVoice ?? "");
+  const [thVoice, setThVoice] = useState(store.tts?.thVoice ?? "");
+  const [rate, setRate] = useState(store.tts?.rate ?? 0.92);
+  const [pitch, setPitch] = useState(store.tts?.pitch ?? 1.0);
+  const [volume, setVolume] = useState(store.tts?.volume ?? 1.0);
+
+  useEffect(() => {
+    const synth = window.speechSynthesis;
+    if (!synth) return;
+    const populate = () => setVoices(synth.getVoices?.() || []);
+    populate();
+    try {
+      synth.addEventListener("voiceschanged", populate);
+      return () => synth.removeEventListener("voiceschanged", populate);
+    } catch {}
+  }, []);
+
+  const enList = voices.filter(v => (v.lang || "").toLowerCase().startsWith("en"));
+  const thList = voices.filter(v => (v.lang || "").toLowerCase().startsWith("th"));
+
+  function save() {
+    setStore((s) => ({ ...s, tts: { ...s.tts, enVoice, thVoice, rate: Number(rate), pitch: Number(pitch), volume: Number(volume) } }));
+  }
+
+  return (
+    <>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label className="flex items-center gap-2">EN voice
+          <select value={enVoice} onChange={(e)=>setEnVoice(e.target.value)} className="flex-1 rounded p-2 bg-white text-black">
+            <option value="">Auto-pick best</option>
+            {enList.map(v => <option key={v.name} value={v.name}>{v.name}</option>)}
+          </select>
+        </label>
+        <label className="flex items-center gap-2">TH voice
+          <select value={thVoice} onChange={(e)=>setThVoice(e.target.value)} className="flex-1 rounded p-2 bg-white text-black">
+            <option value="">Auto-pick best</option>
+            {thList.map(v => <option key={v.name} value={v.name}>{v.name}</option>)}
+          </select>
+        </label>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+        <label className="flex items-center gap-2">Rate
+          <input type="number" step="0.01" min="0.5" max="1.5" value={rate} onChange={(e)=>setRate(e.target.value)} className="w-24 rounded p-2 bg-white text-black" />
+        </label>
+        <label className="flex items-center gap-2">Pitch
+          <input type="number" step="0.01" min="0.5" max="1.5" value={pitch} onChange={(e)=>setPitch(e.target.value)} className="w-24 rounded p-2 bg-white text-black" />
+        </label>
+        <label className="flex items-center gap-2">Volume
+          <input type="number" step="0.1" min="0" max="1" value={volume} onChange={(e)=>setVolume(e.target.value)} className="w-24 rounded p-2 bg-white text-black" />
+        </label>
+      </div>
+
+      <div className="flex gap-2 mt-3">
+        <button onClick={() => ttsSpeak("This is the English preview.", "en-US", { enVoice, rate, pitch, volume })} className="rounded bg-white/10 px-3 py-2 hover:bg-white/20">Preview EN</button>
+        <button onClick={() => ttsSpeak("นี่คือเสียงตัวอย่างภาษาไทย", "th-TH", { thVoice, rate, pitch, volume })} className="rounded bg-white/10 px-3 py-2 hover:bg-white/20">Preview TH</button>
+        <button onClick={save} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600 ml-auto">Save audio settings</button>
+      </div>
+      <div className="text-xs text-slate-400 mt-2">Tip: Chrome often has “Google” voices; Edge has “Microsoft … Online (Natural)”.</div>
+    </>
+  );
+}
+
+/* ===========================
+   CSV Import (with duplicate decision)
+=========================== */
 function ContentManager({ store, setStore }) {
   const fileRef = useRef(null);
   const [error, setError] = useState("");
@@ -1078,11 +1247,7 @@ function ContentManager({ store, setStore }) {
         for (const r of newOnes) {
           const newCard = { id: nextId++, en: r.en, th: r.th, pos: r.pos, example: r.example, syn: r.syn || "" };
           nextDeck.push(newCard);
-          nextCards[newCard.id] = {
-            ef: 2.5, interval: 0, due: todayKey(),
-            dueAt: nowMs(), correct: 0, wrong: 0, reps: 0,
-            introduced: false, introducedOn: null, lastReviewedAt: null
-          };
+          nextCards[newCard.id] = { ef: 2.5, interval: 0, due: todayKey(), dueAt: nowMs(), correct: 0, wrong: 0, reps: 0, introduced: false, introducedOn: null };
         }
 
         setStore((s) => ({ ...s, deck: nextDeck, cards: nextCards }));
@@ -1112,7 +1277,9 @@ function ContentManager({ store, setStore }) {
   );
 }
 
-/* ========== Manage Words (unchanged UI; no stray tokens!) ========== */
+/* ===========================
+   Manage Words (bulk select + delete)
+=========================== */
 function ManageWords({ store, setStore }) {
   const [en, setEn] = useState("");
   const [th, setTh] = useState("");
@@ -1121,10 +1288,9 @@ function ManageWords({ store, setStore }) {
   const [syn, setSyn] = useState("");
   const [editingId, setEditingId] = useState(null);
   const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState(() => new Set());
 
-  function clearForm() {
-    setEn(""); setTh(""); setExample(""); setPos("noun"); setSyn(""); setEditingId(null);
-  }
+  function clearForm() { setEn(""); setTh(""); setExample(""); setPos("noun"); setSyn(""); setEditingId(null); }
 
   function addWord() {
     if (!en.trim() || !th.trim()) return alert("Please enter EN and TH.");
@@ -1134,7 +1300,7 @@ function ManageWords({ store, setStore }) {
     setStore((s) => ({
       ...s,
       deck: newDeck,
-      cards: { ...s.cards, [nextId]: { ef: 2.5, interval: 0, due: todayKey(), dueAt: nowMs(), correct: 0, wrong: 0, reps: 0, introduced: false, introducedOn: null, lastReviewedAt: null } }
+      cards: { ...s.cards, [nextId]: { ef: 2.5, interval: 0, due: todayKey(), dueAt: nowMs(), correct: 0, wrong: 0, reps: 0, introduced: false, introducedOn: null } }
     }));
     clearForm();
   }
@@ -1158,6 +1324,21 @@ function ManageWords({ store, setStore }) {
     delete newCards[id];
     setStore((s) => ({ ...s, deck: newDeck, cards: newCards }));
     if (editingId === id) clearForm();
+    setSelected((prev) => { const n = new Set(prev); n.delete(id); return n; });
+  }
+
+  function deleteSelected() {
+    if (!selected.size) return;
+    const ids = Array.from(selected);
+    const preview = ids.slice(0, 5).map(id => store.deck.find(d => d.id === id)?.en || id).join(", ");
+    if (!confirm(`Delete ${ids.length} selected word(s)?\n${preview}${ids.length > 5 ? ", ..." : ""}`)) return;
+    const idSet = new Set(ids);
+    const newDeck = store.deck.filter(c => !idSet.has(c.id));
+    const newCards = { ...store.cards };
+    ids.forEach(id => delete newCards[id]);
+    setStore((s) => ({ ...s, deck: newDeck, cards: newCards }));
+    if (editingId && idSet.has(editingId)) clearForm();
+    setSelected(new Set());
   }
 
   const filtered = useMemo(() => {
@@ -1170,15 +1351,41 @@ function ManageWords({ store, setStore }) {
     );
   }, [store.deck, query]);
 
+  const allVisibleSelected = filtered.length && filtered.every(item => selected.has(item.id));
+  function toggleSelect(id, checked) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  }
+  function toggleSelectAllVisible(checked) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) filtered.forEach(item => next.add(item.id));
+      else filtered.forEach(item => next.delete(item.id));
+      return next;
+    });
+  }
+
   return (
     <>
-      <div className="mb-3">
+      <div className="mb-3 flex flex-col sm:flex-row gap-2 sm:items-center">
         <input
-          className="w-full p-2 bg-white text-black rounded placeholder-slate-500"
+          className="flex-1 p-2 bg-white text-black rounded placeholder-slate-500"
           placeholder="Search words / meanings / synonyms"
           value={query}
           onChange={(e)=>setQuery(e.target.value)}
         />
+        <label className="text-sm flex items-center gap-2">
+          <input type="checkbox" checked={!!allVisibleSelected} onChange={(e)=>toggleSelectAllVisible(e.target.checked)} />
+          Select all (visible)
+        </label>
+        {selected.size > 0 && (
+          <button onClick={deleteSelected} className="px-3 py-2 bg-red-500 rounded hover:bg-red-600 text-sm">
+            Delete selected ({selected.size})
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
@@ -1209,11 +1416,13 @@ function ManageWords({ store, setStore }) {
       <div className="max-h-80 overflow-auto pr-1">
         <ul className="space-y-2">
           {filtered.map((item) => {
-            const p = store.cards[item.id] ?? {};
-            const left = (p.dueAt ?? nowMs()) - nowMs();
+            const checked = selected.has(item.id);
             return (
               <li key={item.id} className="flex justify-between items-center gap-3 bg-white/5 px-3 py-2 rounded-xl">
-                <span className="text-sm">
+                <label className="flex items-center gap-2 shrink-0">
+                  <input type="checkbox" checked={checked} onChange={(e)=>toggleSelect(item.id, e.target.checked)} />
+                </label>
+                <span className="text-sm flex-1">
                   <b>{item.en}</b> — {item.th} <i className="text-slate-300">({item.pos})</i>
                   {item.example ? <span className="text-slate-300"> · “{item.example}”</span> : null}
                   {item.syn ? (
@@ -1222,15 +1431,12 @@ function ManageWords({ store, setStore }) {
                     </span>
                   ) : null}
                 </span>
-                <div className="flex items-center gap-3 shrink-0 text-xs text-slate-300">
-                  <span>Due in {fmtLeftShort(left)}</span>
-                  <div className="flex gap-2">
-                    <button onClick={() => startEdit(item)} className="px-2 py-1 bg-yellow-500 rounded hover:bg-yellow-600 text-sm">Edit</button>
-                    <button onClick={() => deleteWord(item.id)} className="px-2 py-1 bg-red-500 rounded hover:bg-red-600 text-sm">Delete</button>
-                  </div>
+                <div className="flex gap-2 shrink-0">
+                  <button onClick={() => startEdit(item)} className="px-2 py-1 bg-yellow-500 rounded hover:bg-yellow-600 text-sm">Edit</button>
+                  <button onClick={() => deleteWord(item.id)} className="px-2 py-1 bg-red-500 rounded hover:bg-red-600 text-sm">Delete</button>
                 </div>
               </li>
-            )
+            );
           })}
         </ul>
       </div>
@@ -1249,16 +1455,21 @@ function Footer() {
   );
 }
 
-/* ========== Dev tests ========== */
+/* ===========================
+   Dev tests (console)
+=========================== */
 function runDevTests() {
   try {
     const csv1 = "en,th,pos,example,sym\nhello,สวัสดี,noun,hello there,hi,howdy";
     const rows1 = parseCSV(csv1);
     console.assert(Array.isArray(rows1) && rows1.length === 1, "parseCSV basic length");
     console.assert(rows1[0].en === "hello" && rows1[0].th === "สวัสดี", "parseCSV fields");
+
     const csv2 = 'en,th,sym\n"a, b",เอ บี,"x, y"';
     const rows2 = parseCSV(csv2);
     console.assert(rows2.length === 1 && rows2[0].en === "a, b", "parseCSV quoted comma");
+
+    console.log("[EN Trainer] Dev tests passed");
   } catch (e) {
     console.error("[EN Trainer] Dev tests failed", e);
   }
