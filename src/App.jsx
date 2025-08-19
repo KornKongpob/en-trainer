@@ -21,7 +21,7 @@ const toKeyDate = (d = new Date()) => {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 };
-const fromKeyDate = (k) => { const [y, m, d] = k.split("-").map(Number); return new Date(y, m - 1, d); };
+const fromKeyDate = (k) => { const [y, m, d] = (k || "").split("-").map(Number); return new Date(y || 1970, (m || 1) - 1, d || 1); };
 const todayKey = () => toKeyDate();
 const nowMs = () => Date.now();
 const MS = { min: 60_000, hour: 3_600_000, day: 86_400_000 };
@@ -73,14 +73,19 @@ const initCardProgress = (deck) => Object.fromEntries(
     correct: 0,
     wrong: 0,
     reps: 0,             // SM-2 internal reps
-    reviews: 0,          // total review count (we increment on each grade)
+    reviews: 0,          // total graded count
     introduced: false,
     introducedOn: null,
+    // timing stats (hidden)
+    lastLatencyMs: null,
+    avgLatencyMs: null,
+    latencyCount: 0,
+    latencyHistory: [],  // capped buffer
   }])
 );
 
 /* ===========================
-   SM-2 helper for 3rd+ base
+   SM-2 helper (base for Day-3+)
 =========================== */
 function sm2Step(progress, quality, baseIntervals) {
   let { ef = 2.5, interval = 0, reps = 0 } = progress;
@@ -105,115 +110,78 @@ function sm2Step(progress, quality, baseIntervals) {
 }
 
 /* ===========================
-   Spaced scheduling with:
-   - Day-1 custom (mins/days)
-   - Second-review custom (mins/days)
-   - 3rd+ multipliers on top of SM-2
+   Timing factor (Day-3+ only)
+   - fast (<= fastMs) => clampMax (e.g., 1.25)
+   - slow (>= slowMs) => clampMin (e.g., 0.75)
+   - linear between
 =========================== */
-function computeNext(progress, grade, settings) {
-  const { intervals, day1, secondReview, multiplier3Plus } = settings;
-  const reviews = Number(progress.reviews || 0);
+function computeTimingFactor(latencyMs, timing) {
+  const fast = Math.max(0, Number(timing?.fastMs ?? 5000));
+  const slow = Math.max(fast + 1, Number(timing?.slowMs ?? 25000));
+  const clampMin = Number(timing?.clampMin ?? 0.75);
+  const clampMax = Number(timing?.clampMax ?? 1.25);
 
-  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  if (!Number.isFinite(latencyMs)) return 1.0;
+
+  if (latencyMs <= fast) return clampMax;
+  if (latencyMs >= slow) return clampMin;
+
+  const t = (latencyMs - fast) / (slow - fast); // 0..1
+  const mul = clampMax + (clampMin - clampMax) * t; // linear down
+  return Math.max(clampMin, Math.min(clampMax, mul));
+}
+
+/* ===========================
+   Day-based spacing
+   - Day-1 & Day-2: fixed buttons
+     again=minutes, hard=minutes, good=1d, easy=2d
+   - Day-3+: SM-2 (quality 2/4/5) × timing factor
+=========================== */
+function computeNext(progress, grade, settings, latencyMs) {
+  const { intervals, day1, timing } = settings;
+
+  const introducedOn = progress?.introducedOn || todayKey();
+  const introducedDate = fromKeyDate(introducedOn);
+  const today = fromKeyDate(todayKey());
+  const dayIndex = Math.max(0, Math.round((today - introducedDate) / MS.day)); // 0-based: Day-1 => 0
+
   const mkDue = (deltaMs) => {
     const dueAt = nowMs() + (deltaMs || MS.day);
     return { dueAt, due: toKeyDate(new Date(dueAt)) };
   };
 
-  // AGain always short minutes by stage
-  const stageAgainMins =
-    reviews === 0 ? Number(day1?.againMins ?? 5)
-    : reviews === 1 ? Number(secondReview?.againMins ?? 5)
-    : Number(multiplier3Plus?.againMins ?? 5);
+  // Day 1 & Day 2: fixed menu
+  if (dayIndex <= 1) {
+    if (grade === "again") return { ...progress, interval: 0, ...mkDue(Math.max(1, Number(day1?.againMins ?? 5)) * MS.min) };
+    if (grade === "hard")  return { ...progress, interval: 0, ...mkDue(Math.max(1, Number(day1?.hardMins  ?? 10)) * MS.min) };
+    if (grade === "good")  return { ...sm2Step(progress, 4, intervals), ...mkDue(1 * MS.day), interval: 1 };
+    if (grade === "easy")  return { ...sm2Step(progress, 5, intervals), ...mkDue(2 * MS.day), interval: 2 };
+  }
 
+  // Day 3+ : SM-2 base × timing factor
   if (grade === "again") {
-    const drop = Math.max(0, (progress.reps || 0) - 1);
-    return {
-      ef: Math.max(1.3, (progress.ef || 2.5) - 0.15),
-      interval: 0,
-      reps: drop,
-      reviews, // reviews will be incremented by caller after applying
-      ...mkDue(stageAgainMins * MS.min),
-    };
+    // keep "again" as short minutes even Day-3+
+    const mins = Math.max(1, Number(day1?.againMins ?? 5));
+    return { ...progress, ef: Math.max(1.3, (progress.ef || 2.5) - 0.15), interval: 0, reps: Math.max(0, (progress.reps || 0) - 1), ...mkDue(mins * MS.min) };
   }
 
-  // Day-1 stage
-  if (reviews === 0) {
-    if (grade === "hard") {
-      return {
-        ef: Math.max(1.3, (progress.ef || 2.5) - 0.05),
-        interval: 0,
-        reps: 0,
-        reviews,
-        ...mkDue(Number(day1?.hardMins ?? 10) * MS.min),
-      };
-    }
-    if (grade === "good") {
-      const step = sm2Step(progress, 4, intervals);
-      const days = Math.max(1, Number(day1?.goodDays ?? 1));
-      return { ...step, reviews, ...mkDue(days * MS.day), interval: days };
-    }
-    if (grade === "easy") {
-      const step = sm2Step(progress, 5, intervals);
-      const days = Math.max(1, Number(day1?.easyDays ?? 2));
-      return { ...step, reviews, ...mkDue(days * MS.day), interval: days };
-    }
-  }
+  const q = grade === "hard" ? 2 : grade === "good" ? 4 : 5;
+  const base = sm2Step(progress, q, intervals); // base interval in days
+  const factor = computeTimingFactor(latencyMs, timing); // multiplier 0.75..1.25 by default
+  const nextDays = Math.max(1, Math.round(base.interval * factor));
 
-  // Second review stage (exactly next one after Day-1)
-  if (reviews === 1) {
-    if (grade === "hard") {
-      return {
-        ef: Math.max(1.3, (progress.ef || 2.5) - 0.05),
-        interval: 0,
-        reps: Math.max(0, progress.reps || 0),
-        reviews,
-        ...mkDue(Number(secondReview?.hardMins ?? 10) * MS.min),
-      };
-    }
-    if (grade === "good") {
-      const step = sm2Step(progress, 4, intervals);
-      const days = Math.max(1, Number(secondReview?.goodDays ?? 1));
-      return { ...step, reviews, ...mkDue(days * MS.day), interval: days };
-    }
-    if (grade === "easy") {
-      const step = sm2Step(progress, 5, intervals);
-      const days = Math.max(1, Number(secondReview?.easyDays ?? 2));
-      return { ...step, reviews, ...mkDue(days * MS.day), interval: days };
-    }
-  }
-
-  // 3rd+ stage → normal SM-2 base × multiplier curve (grade-specific)
-  const q = grade === "hard" ? 2 : grade === "good" ? 4 : 5; // map to SM-2 quality
-  const base = sm2Step(progress, q, intervals); // days
-  const curve = (grade === "hard" ? multiplier3Plus?.hard
-                : grade === "good" ? multiplier3Plus?.good
-                : multiplier3Plus?.easy) || { start: 1, growth: 1.08, min: 0.5, max: 10 };
-
-  // reviewN is the review that just happened (1-based). We’re scheduling the next.
-  const reviewN = Math.max(3, reviews + 1);
-  const multRaw = Number(curve.start ?? 1) * Math.pow(Number(curve.growth ?? 1), reviewN - 3);
-  const mult = clamp(multRaw, Number(curve.min ?? 0.5), Number(curve.max ?? 10));
-
-  const nextDays = Math.max(1, Math.round(base.interval * mult));
-  return {
-    ef: base.ef,
-    interval: nextDays,
-    reps: base.reps,
-    reviews,
-    ...mkDue(nextDays * MS.day),
-  };
+  return { ef: base.ef, interval: nextDays, reps: base.reps, ...mkDue(nextDays * MS.day) };
 }
 
-/* Preview label for buttons (non-mutating) */
+/* Preview label for buttons (non-mutating; timing factor ignored for preview) */
 function previewLabel(progress, grade, settings) {
-  const simulated = computeNext(progress, grade, settings);
+  const simulated = computeNext(progress, grade, settings, undefined);
   const delta = Math.max(1, simulated.dueAt - nowMs());
   return humanizeMs(delta);
 }
 
 /* ===========================
-   TTS helper (better voices + settings)
+   TTS helper
 =========================== */
 function pickBestVoice(voices, lang, preferredName) {
   const list = voices.filter(v => (v.lang || "").toLowerCase().startsWith(lang.toLowerCase()));
@@ -261,13 +229,7 @@ export default function App() {
     intervals: { easy: 3, good: 2, hard: 1 }, // base days for SM-2
     dailyNew: 10,
     day1: { againMins: 5, hardMins: 10, goodDays: 1, easyDays: 2 },
-    secondReview: { againMins: 5, hardMins: 10, goodDays: 1, easyDays: 2 },
-    multiplier3Plus: {
-      againMins: 5,
-      hard: { start: 0.9, growth: 1.05, min: 0.5, max: 10 },
-      good: { start: 1.0, growth: 1.08, min: 0.5, max: 10 },
-      easy: { start: 1.2, growth: 1.12, min: 0.5, max: 10 },
-    },
+    timing: { fastMs: 5000, slowMs: 25000, clampMin: 0.75, clampMax: 1.25 }, // new
     tts: {
       enVoice: "", thVoice: "",
       rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false
@@ -282,15 +244,7 @@ export default function App() {
       if (!patched.intervals) patched.intervals = { easy: 3, good: 2, hard: 1 };
       if (typeof patched.dailyNew !== "number") patched.dailyNew = 10;
       if (!patched.day1) patched.day1 = { againMins: 5, hardMins: 10, goodDays: 1, easyDays: 2 };
-      if (!patched.secondReview) patched.secondReview = { againMins: 5, hardMins: 10, goodDays: 1, easyDays: 2 };
-      if (!patched.multiplier3Plus) {
-        patched.multiplier3Plus = {
-          againMins: 5,
-          hard: { start: 0.9, growth: 1.05, min: 0.5, max: 10 },
-          good: { start: 1.0, growth: 1.08, min: 0.5, max: 10 },
-          easy: { start: 1.2, growth: 1.12, min: 0.5, max: 10 },
-        };
-      }
+      if (!patched.timing) patched.timing = { fastMs: 5000, slowMs: 25000, clampMin: 0.75, clampMax: 1.25 };
       if (!patched.tts) patched.tts = { enVoice: "", thVoice: "", rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false };
 
       const cards = { ...(patched.cards || {}) };
@@ -304,6 +258,10 @@ export default function App() {
         if (typeof c.dueAt !== "number") c.dueAt = nowMs(); // add precise timer
         if (typeof c.introduced !== "boolean") c.introduced = false;
         if (!("introducedOn" in c)) c.introducedOn = null;
+        if (!("lastLatencyMs" in c)) c.lastLatencyMs = null;
+        if (!("avgLatencyMs" in c)) c.avgLatencyMs = null;
+        if (!("latencyCount" in c)) c.latencyCount = 0;
+        if (!("latencyHistory" in c)) c.latencyHistory = [];
         cards[id] = c;
       });
       patched.cards = cards;
@@ -635,7 +593,7 @@ function QSItem({ icon: Icon, title, desc, onClick }) {
 }
 
 /* ===========================
-   Flashcards  (Again + previews + minutes scheduling)
+   Flashcards  (Day-based + timing)
 =========================== */
 function Flashcards({ store, setStore, onXP }) {
   const dueCards = useMemo(
@@ -653,8 +611,14 @@ function Flashcards({ store, setStore, onXP }) {
   const card = dueCards[0];
   const [show, setShow] = useState(false);
 
-  // Reset translation when card changes
-  useEffect(() => { setShow(false); }, [card?.id]);
+  // latency timer
+  const latencyStartRef = useRef(null);
+
+  // Reset translation and start timer when card changes
+  useEffect(() => {
+    setShow(false);
+    latencyStartRef.current = nowMs();
+  }, [card?.id]);
 
   // Clamp index when list changes
   useEffect(() => {
@@ -681,29 +645,45 @@ function Flashcards({ store, setStore, onXP }) {
   const prog = store.cards[card.id];
 
   function applyGrade(grade) {
+    const latencyMs = latencyStartRef.current ? Math.max(0, nowMs() - latencyStartRef.current) : null;
+
     const next = computeNext(prog, grade, {
       intervals: store.intervals,
       day1: store.day1,
-      secondReview: store.secondReview,
-      multiplier3Plus: store.multiplier3Plus,
-    });
+      timing: store.timing,
+    }, latencyMs);
+
+    // timing stats update (hidden)
+    const prevAvg = prog.avgLatencyMs || 0;
+    const prevN = prog.latencyCount || 0;
+    const newN = Number.isFinite(latencyMs) ? prevN + 1 : prevN;
+    const newAvg = Number.isFinite(latencyMs)
+      ? Math.round((prevAvg * prevN + latencyMs) / newN)
+      : prevAvg;
 
     const updated = {
       ...prog,
       ...next,
       correct: prog.correct + (grade === "good" || grade === "easy" ? 1 : 0),
       wrong: prog.wrong + (grade === "again" || grade === "hard" ? 1 : 0),
-      reviews: (prog.reviews || 0) + 1, // increment total reviews just completed
+      reviews: (prog.reviews || 0) + 1,
+      lastLatencyMs: latencyMs,
+      avgLatencyMs: newAvg || null,
+      latencyCount: newN,
+      latencyHistory: Number.isFinite(latencyMs)
+        ? [...(prog.latencyHistory || []).slice(-19), latencyMs]
+        : (prog.latencyHistory || []),
     };
 
     setStore((s) => ({ ...s, cards: { ...s.cards, [card.id]: updated } }));
     onXP(grade === "good" || grade === "easy" ? 10 : 4);
     setShow(false);
     setIdx(0);
+    latencyStartRef.current = nowMs(); // start timer for next card
   }
 
-  // Previews for button labels
-  const settingsPack = { intervals: store.intervals, day1: store.day1, secondReview: store.secondReview, multiplier3Plus: store.multiplier3Plus };
+  // Previews for button labels (timing not applied to preview)
+  const settingsPack = { intervals: store.intervals, day1: store.day1, timing: store.timing };
   const lblAgain = previewLabel(prog, "again", settingsPack);
   const lblHard  = previewLabel(prog, "hard",  settingsPack);
   const lblGood  = previewLabel(prog, "good",  settingsPack);
