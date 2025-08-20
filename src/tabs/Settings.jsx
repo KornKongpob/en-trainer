@@ -1,9 +1,9 @@
 // src/tabs/Settings.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { CalendarCheck2, Sparkles } from "lucide-react";
 
-/* Local helpers (mirrors ones in App where needed) */
+/* Local helpers (duplicated small utils for this file) */
 const classNames = (...a) => a.filter(Boolean).join(" ");
-const last = (arr) => (Array.isArray(arr) && arr.length ? arr[arr.length - 1] : undefined);
 const toKeyDate = (d = new Date()) => {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -12,30 +12,10 @@ const toKeyDate = (d = new Date()) => {
 };
 const todayKey = () => toKeyDate();
 const nowMs = () => Date.now();
-const MS = { day: 86_400_000 };
 
-/* Reused SM-2 helper for reschedule button in General tab */
-function sm2Step(progress, quality, baseIntervals) {
-  let { ef = 2.5, interval = 0, reps = 0 } = progress || {};
-  ef = Math.max(1.3, ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)));
-  if (quality < 3) {
-    interval = Math.max(1, Number(baseIntervals?.hard ?? 1));
-    reps = 0;
-  } else if (reps === 0) {
-    interval = Math.max(1, Number(baseIntervals?.good ?? 2));
-    reps = 1;
-  } else if (reps === 1) {
-    interval = Math.max(interval, Number(baseIntervals?.easy ?? 3));
-    reps = 2;
-  } else {
-    const qMul = quality >= 5 ? 1.25 : 1.0;
-    interval = Math.max(1, Math.round(interval * ef * qMul));
-    reps += 1;
-  }
-  return { ef, interval, reps };
-}
+function Card({ children }) { return (<div className="rounded-3xl border border-white/10 bg-white/5 p-4">{children}</div>); }
 
-/* CSV parser (same as before, tiny tweaks) */
+/* CSV parser */
 function parseCSV(text) {
   const t = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const rows = [];
@@ -90,47 +70,18 @@ function parseCSV(text) {
   return out;
 }
 
-/* Audio preview helpers */
-function pickBestVoice(voices, lang, preferredName) {
-  const list = voices.filter(v => (v.lang || "").toLowerCase().startsWith(lang.toLowerCase()));
-  if (!list.length) return null;
-  if (preferredName) {
-    const exact = list.find(v => (v.name || "") === preferredName);
-    if (exact) return exact;
-    const part = list.find(v => (v.name || "").toLowerCase().includes(preferredName.toLowerCase()));
-    if (part) return part;
-  }
-  const byName = (s) => list.find(x => (x.name || "").toLowerCase().includes(s));
-  return byName("google") || byName("microsoft") || list[0] || null;
-}
-function ttsSpeak(text, lang, tts) {
-  try {
-    const synth = window.speechSynthesis;
-    if (!synth) return;
-    const u = new SpeechSynthesisUtterance(String(text));
-    u.lang = lang;
-    const voices = synth.getVoices?.() || [];
-    const prefName = lang.startsWith("th") ? tts?.thVoice : tts?.enVoice;
-    const best = pickBestVoice(voices, lang, prefName);
-    if (best) u.voice = best;
-    u.rate = Number(tts?.rate ?? 0.92);
-    u.pitch = Number(tts?.pitch ?? 1.0);
-    u.volume = Number(tts?.volume ?? 1.0);
-    synth.cancel(); synth.speak(u);
-  } catch {}
-}
-
 /* ===========================
-   Main Settings component
+   Settings root
 =========================== */
 export default function Settings({ store, setStore }) {
-  const [tab, setTab] = useState("general"); // general | day1 | timing | audio | import | manage
+  const [tab, setTab] = useState("general"); // general | day1 | day2 | audio | import | manage | timing
   return (
-    <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
+    <Card>
       <div className="text-lg font-bold mb-4">Settings</div>
       <div className="flex gap-2 mb-4 flex-wrap">
         <button onClick={()=>setTab("general")} className={classNames("px-3 py-2 rounded", tab==="general"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>General</button>
         <button onClick={()=>setTab("day1")} className={classNames("px-3 py-2 rounded", tab==="day1"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Day-1 timings</button>
+        <button onClick={()=>setTab("day2")} className={classNames("px-3 py-2 rounded", tab==="day2"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Day-2 timings</button>
         <button onClick={()=>setTab("timing")} className={classNames("px-3 py-2 rounded", tab==="timing"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Timing (Day-3+)</button>
         <button onClick={()=>setTab("audio")} className={classNames("px-3 py-2 rounded", tab==="audio"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Audio / TTS</button>
         <button onClick={()=>setTab("import")} className={classNames("px-3 py-2 rounded", tab==="import"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Import CSV</button>
@@ -139,17 +90,15 @@ export default function Settings({ store, setStore }) {
 
       {tab === "general" && <GeneralSettings store={store} setStore={setStore} />}
       {tab === "day1" && <Day1Settings store={store} setStore={setStore} />}
+      {tab === "day2" && <Day2Settings store={store} setStore={setStore} />}
       {tab === "timing" && <TimingSettings store={store} setStore={setStore} />}
       {tab === "audio" && <AudioSettings store={store} setStore={setStore} />}
       {tab === "import" && <ContentManager store={store} setStore={setStore} />}
       {tab === "manage" && <ManageWords store={store} setStore={setStore} />}
-    </div>
+    </Card>
   );
 }
 
-/* ---------------------------
-   General
---------------------------- */
 function GeneralSettings({ store, setStore }) {
   const [goal, setGoal] = useState(store.goal);
   const [easyInt, setEasyInt] = useState(store.intervals?.easy ?? 3);
@@ -167,10 +116,9 @@ function GeneralSettings({ store, setStore }) {
       const c = cards[id];
       if (!c.introduced) return;
       // Recompute with "good" as baseline
-      const sim = sm2Step(c, 4, { easy: Number(easyInt), good: Number(goodInt), hard: Number(hardInt) });
-      const deltaMs = Math.max(1, sim.interval) * MS.day;
-      const dueAt = nowMs() + deltaMs;
-      cards[id] = { ...c, due: toKeyDate(new Date(dueAt)), dueAt, interval: sim.interval, ef: sim.ef, reps: Math.max(c.reps, sim.reps) };
+      const interval = Math.max(1, Number(goodInt || 2));
+      const dueAt = nowMs() + interval * 86_400_000;
+      cards[id] = { ...c, due: toKeyDate(new Date(dueAt)), dueAt, interval, reps: Math.max(c.reps || 0, 1) };
     });
     setStore((s) => ({ ...s, cards }));
   }
@@ -185,7 +133,7 @@ function GeneralSettings({ store, setStore }) {
       />
 
       <div className="mb-4">
-        <div className="text-sm mb-1">Base review intervals (days)</div>
+        <div className="text-sm mb-1">Base review intervals (days) for Day-3+</div>
         <div className="flex flex-wrap gap-3 mb-2">
           <label className="flex items-center gap-2">Easy:
             <input type="number" min={1} value={easyInt} onChange={(e) => setEasyInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
@@ -197,7 +145,7 @@ function GeneralSettings({ store, setStore }) {
             <input type="number" min={1} value={hardInt} onChange={(e) => setHardInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
           </label>
         </div>
-        <div className="text-xs text-slate-300">These affect SM-2 after Day-2. EF adapts spacing over time.</div>
+        <div className="text-xs text-slate-300">These are the SM-2 base intervals for Day-3+. EF and timing factor adapt spacing over time.</div>
       </div>
 
       <div className="mb-4">
@@ -218,9 +166,6 @@ function GeneralSettings({ store, setStore }) {
   );
 }
 
-/* ---------------------------
-   Day-1 timings
---------------------------- */
 function Day1Settings({ store, setStore }) {
   const [againMins, setAgainMins] = useState(store.day1?.againMins ?? 5);
   const [hardMins, setHardMins] = useState(store.day1?.hardMins ?? 10);
@@ -238,7 +183,7 @@ function Day1Settings({ store, setStore }) {
 
   return (
     <>
-      <div className="text-sm mb-2">Day-1 & Day-2 options are fixed to: Again (minutes), Hard (minutes), Good (1d), Easy (2d).</div>
+      <div className="text-sm mb-2">Day-1 timings (when you first learn a word)</div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="flex items-center gap-2">Again (minutes)
           <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={againMins} onChange={(e)=>setAgainMins(e.target.value)} />
@@ -253,7 +198,7 @@ function Day1Settings({ store, setStore }) {
           <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={easyDays} onChange={(e)=>setEasyDays(e.target.value)} />
         </label>
       </div>
-      <div className="text-xs text-slate-300 mt-2">From Day-3 onward, spacing follows performance (SM-2) multiplied by the hidden timing factor.</div>
+      <div className="text-xs text-slate-300 mt-2">After Day-1, Day-2 uses (5m / 15m / 1d / 2d). Day-3+ is performance-based (SM-2 + timing).</div>
       <div className="mt-3">
         <button onClick={save} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save Day-1 timings</button>
       </div>
@@ -261,70 +206,91 @@ function Day1Settings({ store, setStore }) {
   );
 }
 
-/* ---------------------------
-   Timing (Day-3+) tuner
---------------------------- */
-function TimingSettings({ store, setStore }) {
-  const [fastSec, setFastSec] = useState(Math.round((store.timing?.fastMs ?? 5000) / 1000));
-  const [slowSec, setSlowSec] = useState(Math.round((store.timing?.slowMs ?? 25000) / 1000));
-  const [clampMin, setClampMin] = useState(store.timing?.clampMin ?? 0.75);
-  const [clampMax, setClampMax] = useState(store.timing?.clampMax ?? 1.25);
+function Day2Settings({ store, setStore }) {
+  const [againMins, setAgainMins] = useState(store.secondReview?.againMins ?? 5);
+  const [hardMins, setHardMins] = useState(store.secondReview?.hardMins ?? 15);
+  const [goodDays, setGoodDays] = useState(store.secondReview?.goodDays ?? 1);
+  const [easyDays, setEasyDays] = useState(store.secondReview?.easyDays ?? 2);
 
   function save() {
-    const fastMs = Math.max(0, Number(fastSec) * 1000);
-    const slowMs = Math.max(fastMs + 1000, Number(slowSec) * 1000);
-    const min = Math.max(0.25, Number(clampMin));
-    const max = Math.max(min + 0.01, Number(clampMax));
-    setStore((s) => ({ ...s, timing: { fastMs, slowMs, clampMin: min, clampMax: max } }));
+    setStore((s) => ({ ...s, secondReview: {
+      againMins: Number(againMins),
+      hardMins: Number(hardMins),
+      goodDays: Number(goodDays),
+      easyDays: Number(easyDays),
+    }}));
   }
 
   return (
     <>
-      <div className="text-sm mb-3">
-        Day-3+ intervals are multiplied by a hidden <b>timing factor</b> based on how quickly you answer:
-        <ul className="list-disc pl-5 mt-2">
-          <li>≤ <b>{fastSec}</b>s → factor ≈ <b>{clampMax.toFixed(2)}</b> (extend interval)</li>
-          <li>≥ <b>{slowSec}</b>s → factor ≈ <b>{clampMin.toFixed(2)}</b> (shorten interval)</li>
-          <li>Linear between fast and slow, clamped to [min, max].</li>
-        </ul>
-      </div>
-
+      <div className="text-sm mb-2">Day-2 timings (your requested change: Hard = <b>15m</b>)</div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <label className="flex items-center gap-2">Fast threshold (seconds)
-          <input type="number" min={1} className="w-28 rounded p-2 bg-white text-black"
-                 value={fastSec} onChange={(e)=>setFastSec(e.target.value)} />
+        <label className="flex items-center gap-2">Again (minutes)
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={againMins} onChange={(e)=>setAgainMins(e.target.value)} />
         </label>
-        <label className="flex items-center gap-2">Slow threshold (seconds)
-          <input type="number" min={2} className="w-28 rounded p-2 bg-white text-black"
-                 value={slowSec} onChange={(e)=>setSlowSec(e.target.value)} />
+        <label className="flex items-center gap-2">Hard (minutes)
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={hardMins} onChange={(e)=>setHardMins(e.target.value)} />
         </label>
-        <label className="flex items-center gap-2">Clamp min
-          <input type="number" step="0.01" min="0.25" className="w-28 rounded p-2 bg-white text-black"
-                 value={clampMin} onChange={(e)=>setClampMin(e.target.value)} />
+        <label className="flex items-center gap-2">Good (days)
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={goodDays} onChange={(e)=>setGoodDays(e.target.value)} />
         </label>
-        <label className="flex items-center gap-2">Clamp max
-          <input type="number" step="0.01" min="0.5" className="w-28 rounded p-2 bg-white text-black"
-                 value={clampMax} onChange={(e)=>setClampMax(e.target.value)} />
+        <label className="flex items-center gap-2">Easy (days)
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={easyDays} onChange={(e)=>setEasyDays(e.target.value)} />
         </label>
       </div>
-
-      <div className="flex gap-2 mt-3">
-        <button onClick={save} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save timing</button>
-        <button
-          onClick={()=>{ setFastSec(5); setSlowSec(25); setClampMin(0.75); setClampMax(1.25); }}
-          className="rounded bg-white/10 px-4 py-2 hover:bg-white/20"
-        >
-          Reset to defaults
-        </button>
+      <div className="text-xs text-slate-300 mt-2">If you press <b>Again</b> on Day-3+, the card will temporarily follow Day-2 rules again for the rest of today.</div>
+      <div className="mt-3">
+        <button onClick={save} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save Day-2 timings</button>
       </div>
-      <div className="text-xs text-slate-400 mt-2">The timing factor is stored per-review (hidden) and used only from Day-3 onward.</div>
     </>
   );
 }
 
-/* ---------------------------
-   Audio / TTS
---------------------------- */
+function TimingSettings({ store, setStore }) {
+  const [fastMs, setFastMs] = useState(store.timing?.fastMs ?? 5000);
+  const [slowMs, setSlowMs] = useState(store.timing?.slowMs ?? 25000);
+  const [clampMin, setClampMin] = useState(store.timing?.clampMin ?? 0.75);
+  const [clampMax, setClampMax] = useState(store.timing?.clampMax ?? 1.25);
+
+  function save() {
+    setStore((s) => ({ ...s, timing: {
+      fastMs: Number(fastMs),
+      slowMs: Number(slowMs),
+      clampMin: Number(clampMin),
+      clampMax: Number(clampMax),
+    }}));
+  }
+
+  return (
+    <>
+      <div className="text-sm mb-2">Hidden timing tuner for Day-3+ (affects spacing via your answer speed)</div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <label className="flex items-center gap-2">Fast (ms)
+          <input type="number" min={1000} step={100} className="w-28 rounded p-2 bg-white text-black" value={fastMs} onChange={(e)=>setFastMs(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-2">Slow (ms)
+          <input type="number" min={2000} step={100} className="w-28 rounded p-2 bg-white text-black" value={slowMs} onChange={(e)=>setSlowMs(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-2">Clamp min
+          <input type="number" step={0.01} min={0.25} max={1.5} className="w-28 rounded p-2 bg-white text-black" value={clampMin} onChange={(e)=>setClampMin(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-2">Clamp max
+          <input type="number" step={0.01} min={0.25} max={2} className="w-28 rounded p-2 bg-white text-black" value={clampMax} onChange={(e)=>setClampMax(e.target.value)} />
+        </label>
+      </div>
+      <div className="text-xs text-slate-300 mt-2">
+        ≤ Fast → larger intervals (up to max); ≥ Slow → smaller intervals (down to min). Interpolated in-between.
+      </div>
+      <div className="mt-3">
+        <button onClick={save} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save timing</button>
+      </div>
+    </>
+  );
+}
+
+/* ===========================
+   Audio Settings
+=========================== */
 function AudioSettings({ store, setStore }) {
   const [voices, setVoices] = useState([]);
   const [enVoice, setEnVoice] = useState(store.tts?.enVoice ?? "");
@@ -346,6 +312,34 @@ function AudioSettings({ store, setStore }) {
 
   const enList = voices.filter(v => (v.lang || "").toLowerCase().startsWith("en"));
   const thList = voices.filter(v => (v.lang || "").toLowerCase().startsWith("th"));
+
+  function pickBestVoice(voices, lang, preferredName) {
+    const list = voices.filter(v => (v.lang || "").toLowerCase().startsWith(lang.toLowerCase()));
+    if (!list.length) return null;
+    if (preferredName) {
+      const exact = list.find(v => (v.name || "") === preferredName);
+      if (exact) return exact;
+      const part = list.find(v => (v.name || "").toLowerCase().includes(preferredName.toLowerCase()));
+      if (part) return part;
+    }
+    const byName = (s) => list.find(x => (x.name || "").toLowerCase().includes(s));
+    return byName("google") || byName("microsoft") || list[0] || null;
+  }
+  function ttsSpeak(text, lang, tts) {
+    try {
+      const synth = window.speechSynthesis;
+      if (!synth) return;
+      const u = new SpeechSynthesisUtterance(String(text));
+      u.lang = lang;
+      const prefName = lang.startsWith("th") ? tts?.thVoice : tts?.enVoice;
+      const best = pickBestVoice(voices, lang, prefName);
+      if (best) u.voice = best;
+      u.rate = Number(tts?.rate ?? 0.92);
+      u.pitch = Number(tts?.pitch ?? 1.0);
+      u.volume = Number(tts?.volume ?? 1.0);
+      synth.cancel(); synth.speak(u);
+    } catch {}
+  }
 
   function save() {
     setStore((s) => ({ ...s, tts: { ...s.tts, enVoice, thVoice, rate: Number(rate), pitch: Number(pitch), volume: Number(volume) } }));
@@ -390,9 +384,9 @@ function AudioSettings({ store, setStore }) {
   );
 }
 
-/* ---------------------------
-   CSV Import
---------------------------- */
+/* ===========================
+   CSV Import (with duplicate decision)
+=========================== */
 function ContentManager({ store, setStore }) {
   const fileRef = useRef(null);
   const [error, setError] = useState("");
@@ -442,7 +436,13 @@ function ContentManager({ store, setStore }) {
         for (const r of newOnes) {
           const newCard = { id: nextId++, en: r.en, th: r.th, pos: r.pos, example: r.example, syn: r.syn || "" };
           nextDeck.push(newCard);
-          nextCards[newCard.id] = { ef: 2.5, interval: 0, due: todayKey(), dueAt: nowMs(), correct: 0, wrong: 0, reps: 0, reviews: 0, introduced: false, introducedOn: null, lastLatencyMs: null, avgLatencyMs: null, latencyCount: 0, latencyHistory: [] };
+          nextCards[newCard.id] = {
+            ef: 2.5, interval: 0, due: todayKey(), dueAt: nowMs(),
+            correct: 0, wrong: 0, reps: 0, reviews: 0,
+            introduced: false, introducedOn: null,
+            stageOverride: null, stageOverrideUntil: null,
+            lastLatencyMs: null, avgLatencyMs: null, latencyCount: 0, latencyHistory: [],
+          };
         }
 
         setStore((s) => ({ ...s, deck: nextDeck, cards: nextCards }));
@@ -472,9 +472,9 @@ function ContentManager({ store, setStore }) {
   );
 }
 
-/* ---------------------------
-   Manage Words
---------------------------- */
+/* ===========================
+   Manage Words (bulk select + delete)
+=========================== */
 function ManageWords({ store, setStore }) {
   const [en, setEn] = useState("");
   const [th, setTh] = useState("");
@@ -489,13 +489,19 @@ function ManageWords({ store, setStore }) {
 
   function addWord() {
     if (!en.trim() || !th.trim()) return alert("Please enter EN and TH.");
-    const nextId = (last(store.deck)?.id || 0) + 1;
+    const nextId = (store.deck[store.deck.length - 1]?.id || 0) + 1;
     const newCard = { id: nextId, en, th, pos, example, syn };
     const newDeck = [...store.deck, newCard];
     setStore((s) => ({
       ...s,
       deck: newDeck,
-      cards: { ...s.cards, [nextId]: { ef: 2.5, interval: 0, due: todayKey(), dueAt: nowMs(), correct: 0, wrong: 0, reps: 0, reviews: 0, introduced: false, introducedOn: null, lastLatencyMs: null, avgLatencyMs: null, latencyCount: 0, latencyHistory: [] } }
+      cards: { ...s.cards, [nextId]: {
+        ef: 2.5, interval: 0, due: todayKey(), dueAt: nowMs(),
+        correct: 0, wrong: 0, reps: 0, reviews: 0,
+        introduced: false, introducedOn: null,
+        stageOverride: null, stageOverrideUntil: null,
+        lastLatencyMs: null, avgLatencyMs: null, latencyCount: 0, latencyHistory: [],
+      } }
     }));
     clearForm();
   }
