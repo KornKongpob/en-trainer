@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { CalendarCheck2, Sparkles } from "lucide-react";
 
 const classNames = (...a) => a.filter(Boolean).join(" ");
+const last = (arr) => (Array.isArray(arr) && arr.length ? arr[arr.length - 1] : null);
 const toKeyDate = (d = new Date()) => {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -16,7 +17,7 @@ function Card({ children }) {
 }
 
 export default function Settings({ store, setStore }) {
-  const [tab, setTab] = useState("general"); // general | day1 | audio | import | manage | timing
+  const [tab, setTab] = useState("general"); // general | day1 | timing | audio | import | manage
 
   return (
     <Card>
@@ -207,8 +208,80 @@ function TimingSettings({ store, setStore }) {
   );
 }
 
+/* =============== Audio / TTS =============== */
+function AudioSettings({ store, setStore }) {
+  const [voices, setVoices] = useState([]);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    const update = () => {
+      const v = window.speechSynthesis.getVoices();
+      if (v && v.length) setVoices(v);
+    };
+    update();
+    window.speechSynthesis.onvoiceschanged = update;
+    return () => { window.speechSynthesis.onvoiceschanged = null; };
+  }, []);
+
+  const tts = store.tts || { enVoice: "", thVoice: "", rate: 0.92, pitch: 1.0, volume: 1.0 };
+  const enVoices = voices.filter(v => /^en(-|_|$)/i.test(v.lang || ""));
+  const thVoices = voices.filter(v => /^th(-|_|$)/i.test(v.lang || ""));
+  const setTTS = (patch) => setStore(s => ({ ...s, tts: { ...(s.tts || {}), ...patch } }));
+
+  return (
+    <>
+      <div className="text-sm mb-2">Choose voices and defaults</div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label className="text-sm">English voice
+          <select className="mt-1 w-full rounded p-2 bg-white text-black"
+                  value={tts.enVoice || ""}
+                  onChange={(e)=>setTTS({ enVoice: e.target.value })}>
+            {enVoices.length
+              ? enVoices.map(v => <option key={`${v.name}__${v.lang}`} value={`${v.name}__${v.lang}`}>{v.name} — {v.lang}</option>)
+              : <option>(voices loading… click any Play once)</option>}
+          </select>
+        </label>
+        <label className="text-sm">Thai voice
+          <select className="mt-1 w-full rounded p-2 bg-white text-black"
+                  value={tts.thVoice || ""}
+                  onChange={(e)=>setTTS({ thVoice: e.target.value })}>
+            {thVoices.length
+              ? thVoices.map(v => <option key={`${v.name}__${v.lang}`} value={`${v.name}__${v.lang}`}>{v.name} — {v.lang}</option>)
+              : <option>(voices loading…)</option>}
+          </select>
+        </label>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+        <label className="text-sm">Rate
+          <input type="range" min="0.5" max="1.4" step="0.05" className="w-full"
+                 value={Number(tts.rate ?? 0.92)}
+                 onChange={(e)=>setTTS({ rate: parseFloat(e.target.value) })} />
+          <div className="text-xs text-slate-300">{Number(tts.rate ?? 0.92).toFixed(2)}x</div>
+        </label>
+        <label className="text-sm">Pitch
+          <input type="range" min="0.8" max="1.2" step="0.02" className="w-full"
+                 value={Number(tts.pitch ?? 1.0)}
+                 onChange={(e)=>setTTS({ pitch: parseFloat(e.target.value) })} />
+          <div className="text-xs text-slate-300">{Number(tts.pitch ?? 1.0).toFixed(2)}</div>
+        </label>
+        <label className="text-sm">Volume
+          <input type="range" min="0.5" max="1" step="0.05" className="w-full"
+                 value={Number(tts.volume ?? 1.0)}
+                 onChange={(e)=>setTTS({ volume: parseFloat(e.target.value) })} />
+          <div className="text-xs text-slate-300">{Math.round(Number(tts.volume ?? 1.0)*100)}%</div>
+        </label>
+      </div>
+
+      <div className="text-xs text-slate-400 mt-3">
+        Tip: On Chrome, voices whose name starts with <b>Google</b> sound closest to Google Translate.
+      </div>
+    </>
+  );
+}
+
 /* =============== Import CSV =============== */
-// (Kept simple—same behavior as before; headers: en, th, pos, example, sym)
+// Headers: en, th, pos, example, sym (synonyms)
 function parseCSV(text) {
   const t = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const rows = [];
@@ -334,7 +407,7 @@ function ContentManager({ store, setStore }) {
   );
 }
 
-/* =============== Manage Words (kept) =============== */
+/* =============== Manage Words =============== */
 function ManageWords({ store, setStore }) {
   const [en, setEn] = useState("");
   const [th, setTh] = useState("");

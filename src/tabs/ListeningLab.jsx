@@ -5,14 +5,17 @@ import { Volume2, Mic, Square, Play } from "lucide-react";
 const classNames = (...a) => a.filter(Boolean).join(" ");
 function Card({ children }) { return <div className="rounded-3xl border border-white/10 bg-white/5 p-4">{children}</div>; }
 
-export default function ListeningLab({ store, onXP }) {
+function voiceToKey(v) { return `${v.name}__${v.lang}`; }
+function clamp(n, a, b) { return Math.min(b, Math.max(a, n)); }
+
+export default function ListeningLab({ store, setStore, onXP }) {
   // ----- Source of text -----
   const [source, setSource] = useState("deck");
   const firstId = store.deck[0]?.id ?? null;
   const [selectedId, setSelectedId] = useState(firstId);
   const [customText, setCustomText] = useState("");
 
-  // ----- Scoring / STT -----
+  // ----- Recognize/score -----
   const [recognized, setRecognized] = useState("");
   const [scorePct, setScorePct] = useState(null);
 
@@ -23,16 +26,41 @@ export default function ListeningLab({ store, onXP }) {
   const [audioURL, setAudioURL] = useState(null);
   const audioRef = useRef(null);
 
-  // ----- Voices / TTS controls -----
+  // ----- TTS state (global settings) -----
   const [voices, setVoices] = useState([]);
-  const [voiceKey, setVoiceKey] = useState(""); // string key
-  const [rate, setRate] = useState(1.0);   // closer to Google Translate feel
-  const [pitch, setPitch] = useState(1.0);
-  const [volume, setVolume] = useState(1.0);
+  const speakTokenRef = useRef(0); // cancel token to stop chains
+  const [speaking, setSpeaking] = useState(false);
   const [mode, setMode] = useState("normal"); // normal | slow | clarity | words
   const [repeat, setRepeat] = useState(1);
   const [loop, setLoop] = useState(false);
-  const [speaking, setSpeaking] = useState(false);
+
+  // Use one shared picker that prefers Google voices
+  const currentVoice = useMemo(() => {
+    const synth = typeof window !== "undefined" ? window.speechSynthesis : null;
+    const list = synth?.getVoices?.() || voices || [];
+    const prefName = store.tts?.enVoice || "";
+    // 1) exact user choice
+    let v = list.find(v => v && voiceToKey(v) === prefName);
+    if (v) return v;
+    // 2) Prefer Google* English voices (closest to Google Translate in Chrome)
+    const en = list.filter(x => /^en(-|_|$)/i.test(x.lang || ""));
+    const score = (x) => {
+      const n = (x.name || "").toLowerCase();
+      let s = 0;
+      if (n.startsWith("google")) s += 5;
+      if (n.includes("google")) s += 3;
+      if (/en-us/i.test(x.lang)) s += 2;
+      if (n.includes("enhanced")) s += 1;
+      return s;
+    };
+    v = en.sort((a,b)=>score(b)-score(a))[0] || list[0] || null;
+    return v || null;
+  }, [voices, store.tts?.enVoice]);
+
+  // Keep a copy of sliders bound to global settings (live)
+  const rate  = Number(store.tts?.rate ?? 0.92);
+  const pitch = Number(store.tts?.pitch ?? 1.0);
+  const volume= Number(store.tts?.volume ?? 1.0);
 
   // ----- STT support -----
   const Recognition =
@@ -76,59 +104,28 @@ export default function ListeningLab({ store, onXP }) {
     if (pct >= 85) onXP?.(12); else onXP?.(5);
   }
 
-  // ====== Voices: load & choose (prefer Google voices) ======
+  // ====== Voices: load & stay updated ======
   useEffect(() => {
     if (typeof window === "undefined" || !window.speechSynthesis) return;
-
-    const voiceToKey = (v) => `${v.name}__${v.lang}`;
-    const pickDefault = (list) => {
-      const en = list.filter(v => /^en(-|_|$)/i.test(v.lang));
-      const scoreVoice = (v) => {
-        const name = (v.name || "").toLowerCase();
-        const lang = (v.lang || "").toLowerCase();
-        let s = 0;
-        // Strongly prefer Chrome "Google ..." voices (closest to Google Translate)
-        if (name.includes("google")) s += 10;
-        // Then other popular high-quality voices
-        if (name.includes("enhanced")) s += 3;
-        if (name.includes("samantha") || name.includes("karen") || name.includes("daniel")) s += 2;
-        // Locale preference
-        if (/en-us/.test(lang)) s += 3;
-        if (/en-gb|en-au|en-in/.test(lang)) s += 1;
-        return s;
-      };
-      const pool = en.length ? en : list;
-      const best = pool.slice().sort((a,b)=>scoreVoice(b)-scoreVoice(a))[0];
-      return best || list[0];
-    };
-
     const updateList = () => {
       const list = window.speechSynthesis.getVoices();
       if (!list || !list.length) return;
       setVoices(list);
-      setVoiceKey((prev) => {
-        if (prev) return prev;
-        const def = pickDefault(list);
-        return def ? voiceToKey(def) : "";
-      });
     };
-
     updateList();
     window.speechSynthesis.onvoiceschanged = updateList;
     return () => { window.speechSynthesis.onvoiceschanged = null; };
   }, []);
 
-  const currentVoice = useMemo(() => {
-    return voices.find(v => `${v.name}__${v.lang}` === voiceKey);
-  }, [voices, voiceKey]);
-
   // ====== TTS engine ======
   const stopSpeech = () => {
-    try { window.speechSynthesis.cancel(); } catch {}
+    try { window.speechSynthesis?.cancel(); } catch {}
+    speakTokenRef.current += 1; // invalidate running speak loop
+    setLoop(false);
     setSpeaking(false);
   };
 
-  async function speakOnce(text, { rate, pitch, volume, voice }) {
+  async function speakOnce(text, { rate, pitch, volume, voice, token }) {
     return new Promise((resolve) => {
       try {
         const u = new SpeechSynthesisUtterance(text);
@@ -136,8 +133,11 @@ export default function ListeningLab({ store, onXP }) {
         u.rate = rate;
         u.pitch = pitch;
         u.volume = volume;
-        u.onend = () => resolve();
-        u.onerror = () => resolve();
+        const onDone = () => resolve();
+        u.onend = onDone;
+        u.onerror = onDone;
+        // If we were cancelled before speaking, bail fast
+        if (token !== speakTokenRef.current) return resolve();
         window.speechSynthesis.speak(u);
       } catch {
         resolve();
@@ -145,38 +145,57 @@ export default function ListeningLab({ store, onXP }) {
     });
   }
 
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const wait = (ms, token) =>
+    new Promise((r) => {
+      const start = Date.now();
+      const step = () => {
+        if (token !== speakTokenRef.current) return r();
+        if (Date.now() - start >= ms) return r();
+        requestAnimationFrame(step);
+      };
+      step();
+    });
 
   async function speakWithMode() {
     if (!expected) return;
-    stopSpeech();
+    stopSpeech(); // cancel any previous queue and token
+    const token = ++speakTokenRef.current;
     setSpeaking(true);
 
-    const base = { rate, pitch, volume, voice: currentVoice };
-    const clamp = (n, a, b) => Math.min(b, Math.max(a, n));
+    const base = {
+      rate, pitch, volume,
+      voice: currentVoice,
+      token,
+    };
 
     try {
-      for (let round = 0; round < repeat || 1; round++) {
-        if (mode === "slow") {
-          await speakOnce(expected, { ...base, rate: clamp(rate - 0.2, 0.5, 1.4) });
-        } else if (mode === "clarity") {
-          await speakOnce(expected, { ...base, rate: clamp(rate - 0.2, 0.5, 1.4) });
-          await wait(200);
-          await speakOnce(expected, base);
-        } else if (mode === "words") {
-          const words = expected.split(/\s+/).filter(Boolean);
-          for (const w of words) {
-            await speakOnce(w, { ...base, rate: clamp(rate - 0.1, 0.5, 1.4) });
-            await wait(120);
+      do {
+        for (let round = 0; round < (repeat || 1); round++) {
+          if (token !== speakTokenRef.current) return; // cancelled
+          if (mode === "slow") {
+            await speakOnce(expected, { ...base, rate: clamp(rate - 0.2, 0.5, 1.4) });
+          } else if (mode === "clarity") {
+            await speakOnce(expected, { ...base, rate: clamp(rate - 0.2, 0.5, 1.4) });
+            await wait(150, token);
+            if (token !== speakTokenRef.current) return;
+            await speakOnce(expected, base);
+          } else if (mode === "words") {
+            const words = expected.split(/\s+/).filter(Boolean);
+            for (const w of words) {
+              if (token !== speakTokenRef.current) return;
+              await speakOnce(w, { ...base, rate: clamp(rate - 0.1, 0.5, 1.4) });
+              await wait(100, token);
+            }
+          } else {
+            await speakOnce(expected, base);
           }
-        } else {
-          await speakOnce(expected, base);
+          await wait(120, token);
         }
-        await wait(120);
-      }
+        // loop guard
+        if (!loop || token !== speakTokenRef.current) break;
+      } while (true);
     } finally {
-      setSpeaking(false);
-      if (loop) { speakWithMode(); } // loop if toggled
+      if (token === speakTokenRef.current) setSpeaking(false);
     }
   }
 
@@ -221,13 +240,17 @@ export default function ListeningLab({ store, onXP }) {
     rec.start();
   }
 
-  const voiceToKey = (v) => `${v.name}__${v.lang}`;
+  // ====== Handlers to write into global Settings (so Settings page works) ======
+  const setTTS = (patch) => setStore?.((s) => ({ ...s, tts: { ...(s.tts || {}), ...patch } }));
+
+  // UI: only English voices for this lab
+  const enVoices = (voices || []).filter(v => /^en(-|_|$)/i.test(v.lang || ""));
 
   return (
     <Card>
       <div className="flex items-center justify-between mb-3">
         <div className="font-semibold">Listening & Speaking Lab</div>
-        <div className="text-xs text-slate-400">Google-like voice · clarity modes · loop & repeat</div>
+        <div className="text-xs text-slate-400">Google-like voices · loop · clarity modes</div>
       </div>
 
       {/* Source */}
@@ -269,36 +292,38 @@ export default function ListeningLab({ store, onXP }) {
             </div>
           )}
 
-          {/* TTS controls */}
+          {/* TTS controls (bound to Settings) */}
           <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <div className="text-sm mb-1">Voice</div>
+              <div className="text-sm mb-1">Voice (EN)</div>
               <select
                 className="w-full rounded p-2 bg-white text-black"
-                value={voiceKey}
-                onChange={(e)=>setVoiceKey(e.target.value)}
+                value={store.tts?.enVoice || ""}
+                onChange={(e)=>setTTS({ enVoice: e.target.value })}
               >
-                {voices
-                  .filter(v => /^en(-|_|$)/i.test(v.lang))
-                  .map(v => <option key={voiceToKey(v)} value={voiceToKey(v)}>{v.name} — {v.lang}</option>)}
-                {!voices.length && <option>(voices loading… tap Play once)</option>}
+                {enVoices.length
+                  ? enVoices.map(v => <option key={voiceToKey(v)} value={voiceToKey(v)}>{v.name} — {v.lang}</option>)
+                  : <option>(voices loading… click Play once)</option>}
               </select>
             </div>
 
             <div className="grid grid-cols-3 gap-3">
               <div>
                 <div className="text-sm mb-1">Rate</div>
-                <input type="range" min="0.5" max="1.4" step="0.05" value={rate} onChange={(e)=>setRate(parseFloat(e.target.value))} className="w-full" />
+                <input type="range" min="0.5" max="1.4" step="0.05" value={rate}
+                       onChange={(e)=>setTTS({ rate: parseFloat(e.target.value) })} className="w-full" />
                 <div className="text-xs text-slate-300">{rate.toFixed(2)}x</div>
               </div>
               <div>
                 <div className="text-sm mb-1">Pitch</div>
-                <input type="range" min="0.8" max="1.2" step="0.02" value={pitch} onChange={(e)=>setPitch(parseFloat(e.target.value))} className="w-full" />
+                <input type="range" min="0.8" max="1.2" step="0.02" value={pitch}
+                       onChange={(e)=>setTTS({ pitch: parseFloat(e.target.value) })} className="w-full" />
                 <div className="text-xs text-slate-300">{pitch.toFixed(2)}</div>
               </div>
               <div>
                 <div className="text-sm mb-1">Volume</div>
-                <input type="range" min="0.5" max="1" step="0.05" value={volume} onChange={(e)=>setVolume(parseFloat(e.target.value))} className="w-full" />
+                <input type="range" min="0.5" max="1" step="0.05" value={volume}
+                       onChange={(e)=>setTTS({ volume: parseFloat(e.target.value) })} className="w-full" />
                 <div className="text-xs text-slate-300">{Math.round(volume*100)}%</div>
               </div>
             </div>
@@ -405,10 +430,10 @@ export default function ListeningLab({ store, onXP }) {
           <Card>
             <div className="text-sm text-slate-400">Tips for clarity</div>
             <ul className="mt-2 text-sm list-disc pl-5 space-y-1 text-slate-300">
-              <li>Prefer a <b>Google</b> voice (e.g., “Google US English”) when available.</li>
+              <li>Choose a <b>Google*</b> English voice for the most familiar sound.</li>
               <li>Use <b>Slow</b> or <b>Clarity</b> mode to hear it clearly, then normally.</li>
               <li><b>Word-by-word</b> mode helps you hear each word distinctly.</li>
-              <li>Repeat or enable <b>Loop</b> for shadowing practice.</li>
+              <li>Use <b>Loop</b> for shadowing practice, and click <b>Stop</b> to cancel immediately.</li>
             </ul>
           </Card>
         </div>

@@ -1,11 +1,13 @@
 // src/App.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  BookOpen, Brain, CalendarCheck2, CheckCircle2, Flame,
-  Headphones, Home, Moon, Sparkles, Star, Sun, Trophy, Volume2
+  BookOpen, Brain, CalendarCheck2, Flame,
+  Headphones, Home, Moon, Sparkles, Star, Sun, Trophy,
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
+
+import Flashcards from "./tabs/Flashcards";
 import Quiz from "./tabs/Quiz";
 import Settings from "./tabs/Settings";
 import ListeningLab from "./tabs/ListeningLab";
@@ -13,7 +15,6 @@ import ListeningLab from "./tabs/ListeningLab";
 /* ===========================
    Small helpers
 =========================== */
-const last = (arr) => (Array.isArray(arr) && arr.length ? arr[arr.length - 1] : undefined);
 const classNames = (...a) => a.filter(Boolean).join(" ");
 const toKeyDate = (d = new Date()) => {
   const y = d.getFullYear();
@@ -23,10 +24,8 @@ const toKeyDate = (d = new Date()) => {
 };
 const fromKeyDate = (k) => { const [y, m, d] = k.split("-").map(Number); return new Date(y, m - 1, d); };
 const todayKey = () => toKeyDate();
-const nowMs = () => Date.now();
 const MS = { min: 60_000, hour: 3_600_000, day: 86_400_000 };
 
-/* Durations like 5m / 2h / 3d */
 function humanizeMs(ms) {
   if (ms < MS.hour) return `${Math.max(1, Math.round(ms / MS.min))}m`;
   if (ms < MS.day) return `${Math.max(1, Math.round(ms / MS.hour))}h`;
@@ -62,221 +61,14 @@ function usePersistentState(defaults) {
 }
 
 /* ===========================
-   Card progress init
-=========================== */
-const initCardProgress = (deck) => Object.fromEntries(
-  deck.map((c) => [c.id, {
-    ef: 2.5,
-    interval: 0,
-    due: todayKey(),     // by day (legacy)
-    dueAt: nowMs(),      // precise
-    correct: 0,
-    wrong: 0,
-    reps: 0,             // SM-2 internal reps
-    reviews: 0,          // total graded count
-    introduced: false,
-    introducedOn: null,
-
-    // timing stats
-    lastLatencyMs: null,
-    avgLatencyMs: null,
-    latencyCount: 0,
-    latencyHistory: [],  // light ring buffer (cap 10)
-
-    // Day-3+ "Again" penalty per day
-    penaltyDateKey: null,      // YYYY-MM-DD of penalties
-    penaltyLevelToday: 0,      // 0,1,2+ (reduces H/G/E previews on Day-3+)
-  }])
-);
-
-/* ===========================
-   SM-2 helper
-=========================== */
-function sm2Step(progress, quality, baseIntervals) {
-  let { ef = 2.5, interval = 0, reps = 0 } = progress;
-  ef = Math.max(1.3, ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)));
-  if (quality < 3) {
-    interval = Math.max(1, Number(baseIntervals?.hard ?? 1));
-    reps = 0;
-  } else if (reps === 0) {
-    interval = Math.max(1, Number(baseIntervals?.good ?? 2));
-    reps = 1;
-  } else if (reps === 1) {
-    interval = Math.max(interval, Number(baseIntervals?.easy ?? 3));
-    reps = 2;
-  } else {
-    const qMul = quality >= 5 ? 1.25 : 1.0;
-    interval = Math.max(1, Math.round(interval * ef * qMul));
-    reps += 1;
-  }
-  return { ef, interval, reps };
-}
-
-/* ===========================
-   Stage resolution (by calendar day)
-=========================== */
-function baseStageFor(prog) {
-  const intro = prog?.introducedOn;
-  if (!intro) return "day3plus";
-  const t = todayKey();
-  if (t === intro) return "day1";
-  const introD = fromKeyDate(intro);
-  const tD = fromKeyDate(t);
-  const diffDays = Math.round((tD - introD) / MS.day);
-  if (diffDays === 1) return "day2";
-  return "day3plus";
-}
-
-/* ===========================
-   Timing factor (Day-3+ only)
-=========================== */
-function computeTimingFactor(latencyMs, timing) {
-  const fast = Math.max(0, Number(timing?.fastMs ?? 5000));
-  const slow = Math.max(fast + 1, Number(timing?.slowMs ?? 25000));
-  const clampMin = Number(timing?.clampMin ?? 0.75);
-  const clampMax = Number(timing?.clampMax ?? 1.25);
-  if (!Number.isFinite(latencyMs)) return 1.0;
-  if (latencyMs <= fast) return clampMax;
-  if (latencyMs >= slow) return clampMin;
-  const t = (latencyMs - fast) / (slow - fast);
-  const mul = clampMax + (clampMin - clampMax) * t;
-  return Math.max(clampMin, Math.min(clampMax, mul));
-}
-
-/* ===========================
-   Penalty multipliers for Day-3+ (cumulative)
-=========================== */
-function penaltyMultiplier(level, grade) {
-  if (level <= 0) return 1;
-  const first = grade === "hard" ? 0.40 : 0.60;
-  const subsequent = grade === "hard" ? 0.25 : 0.50;
-  return first * Math.pow(subsequent, level - 1);
-}
-
-/* ===========================
-   Compute Next scheduling (uses stage + timing + penalty)
-=========================== */
-function computeNext(progress, grade, settings, latencyHintMs) {
-  const { intervals, day1, day2, timing } = settings;
-  const stage = baseStageFor(progress);
-
-  const mkDue = (deltaMs) => {
-    const dueAt = nowMs() + (deltaMs || MS.day);
-    return { dueAt, due: toKeyDate(new Date(dueAt)) };
-  };
-
-  // ALWAYS: "Again" reduces EF slightly and drops reps a bit.
-  const dropEF = (ef, amount) => Math.max(1.3, (ef || 2.5) - amount);
-  const dropReps = (reps) => Math.max(0, (reps || 0) - 1);
-
-  // DAY 1 rules
-  if (stage === "day1") {
-    if (grade === "again") {
-      const mins = Math.max(1, Number(day1?.againMins ?? 5));
-      return { ef: dropEF(progress.ef, 0.15), interval: 0, reps: dropReps(progress.reps), reviews: progress.reviews, ...mkDue(mins * MS.min) };
-    }
-    if (grade === "hard") {
-      const mins = Math.max(1, Number(day1?.hardMins ?? 10));
-      return { ef: dropEF(progress.ef, 0.05), interval: 0, reps: Math.max(0, progress.reps || 0), reviews: progress.reviews, ...mkDue(mins * MS.min) };
-    }
-    if (grade === "good") {
-      const step = sm2Step(progress, 4, intervals);
-      return { ...step, reviews: progress.reviews, ...mkDue(Math.max(1, Number(day1?.goodDays ?? 1)) * MS.day), interval: Math.max(1, Number(day1?.goodDays ?? 1)) };
-    }
-    if (grade === "easy") {
-      const step = sm2Step(progress, 5, intervals);
-      return { ...step, reviews: progress.reviews, ...mkDue(Math.max(1, Number(day1?.easyDays ?? 2)) * MS.day), interval: Math.max(1, Number(day1?.easyDays ?? 2)) };
-    }
-  }
-
-  // DAY 2 rules
-  if (stage === "day2") {
-    if (grade === "again") {
-      const mins = Math.max(1, Number(day2?.againMins ?? 5));
-      return { ef: dropEF(progress.ef, 0.15), interval: 0, reps: dropReps(progress.reps), reviews: progress.reviews, ...mkDue(mins * MS.min) };
-    }
-    if (grade === "hard") {
-      const mins = Math.max(1, Number(day2?.hardMins ?? 15));
-      return { ef: dropEF(progress.ef, 0.05), interval: 0, reps: Math.max(0, progress.reps || 0), reviews: progress.reviews, ...mkDue(mins * MS.min) };
-    }
-    if (grade === "good") {
-      const step = sm2Step(progress, 4, intervals);
-      return { ...step, reviews: progress.reviews, ...mkDue(Math.max(1, Number(day2?.goodDays ?? 1)) * MS.day), interval: Math.max(1, Number(day2?.goodDays ?? 1)) };
-    }
-    if (grade === "easy") {
-      const step = sm2Step(progress, 5, intervals);
-      return { ...step, reviews: progress.reviews, ...mkDue(Math.max(1, Number(day2?.easyDays ?? 2)) * MS.day), interval: Math.max(1, Number(day2?.easyDays ?? 2)) };
-    }
-  }
-
-  // DAY 3+ rules
-  if (grade === "again") {
-    return { ef: dropEF(progress.ef, 0.15), interval: 0, reps: dropReps(progress.reps), reviews: progress.reviews, ...mkDue(15 * MS.min) };
-  }
-
-  const quality = grade === "hard" ? 2 : grade === "good" ? 4 : 5;
-  const base = sm2Step(progress, quality, intervals);
-  const tf = computeTimingFactor(
-    Number.isFinite(latencyHintMs) ? latencyHintMs : (progress.lastLatencyMs ?? (settings?.timing?.fastMs ?? 5000)),
-    timing
-  );
-  let days = Math.max(1, Math.floor(base.interval * tf));
-
-  const today = todayKey();
-  const level = (progress.penaltyDateKey === today) ? (progress.penaltyLevelToday || 0) : 0;
-  const pMul = penaltyMultiplier(level, grade);
-  days = Math.max(1, Math.floor(days * pMul));
-
-  return { ef: base.ef, interval: days, reps: base.reps, reviews: progress.reviews, ...mkDue(days * MS.day) };
-}
-
-/* Preview label for buttons */
-function previewLabel(progress, grade, settings) {
-  const simulated = computeNext(progress, grade, settings, progress.lastLatencyMs ?? (settings?.timing?.fastMs ?? 5000));
-  const delta = Math.max(1, simulated.dueAt - nowMs());
-  return humanizeMs(delta);
-}
-
-/* ===========================
-   TTS helper (cards): prefer Google voices if present
-=========================== */
-function pickBestVoice(voices, lang, preferredName) {
-  const list = voices.filter(v => (v.lang || "").toLowerCase().startsWith(lang.toLowerCase()));
-  if (!list.length) return null;
-  if (preferredName) {
-    const exact = list.find(v => (v.name || "") === preferredName);
-    if (exact) return exact;
-    const part = list.find(v => (v.name || "").toLowerCase().includes(preferredName.toLowerCase()));
-    if (part) return part;
-  }
-  const byName = (s) => list.find(x => (x.name || "").toLowerCase().includes(s));
-  return byName("google") || byName("microsoft") || list[0] || null;
-}
-function ttsSpeak(text, lang, tts) {
-  try {
-    const synth = window.speechSynthesis;
-    if (!synth) return;
-    const u = new SpeechSynthesisUtterance(String(text));
-    u.lang = lang;
-    const voices = synth.getVoices?.() || [];
-    const prefName = lang.startsWith("th") ? tts?.thVoice : tts?.enVoice;
-    const best = pickBestVoice(voices, lang, prefName);
-    if (best) u.voice = best;
-    u.rate = Number(tts?.rate ?? 0.92);
-    u.pitch = Number(tts?.pitch ?? 1.0);
-    u.volume = Number(tts?.volume ?? 1.0);
-    synth.cancel(); synth.speak(u);
-  } catch {}
-}
-
-/* ===========================
    App
 =========================== */
 export default function App() {
   const [store, setStore] = usePersistentState({
     theme: "dark",
     deck: DEFAULT_DECK,
-    cards: initCardProgress(DEFAULT_DECK),
+    // cards will be initialized when words are introduced
+    cards: {},
     xp: 0,
     goal: 50,
     streak: 0,
@@ -291,7 +83,7 @@ export default function App() {
     tts: { enVoice: "", thVoice: "", rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false }
   });
 
-  // Patch older saves to include new keys
+  // Patch older saves to include new keys/fields
   useEffect(() => {
     setStore((s) => {
       const patched = { ...s };
@@ -301,32 +93,10 @@ export default function App() {
       if (!patched.day2) patched.day2 = { againMins: 5, hardMins: 15, goodDays: 1, easyDays: 2 };
       if (!patched.timing) patched.timing = { fastMs: 5000, slowMs: 25000, clampMin: 0.75, clampMax: 1.25 };
       if (!patched.tts) patched.tts = { enVoice: "", thVoice: "", rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false };
-
-      const cards = { ...(patched.cards || {}) };
-      Object.keys(cards || {}).forEach((id) => {
-        const c = cards[id] || {};
-        if (typeof c.reps !== "number") c.reps = 0;
-        if (typeof c.reviews !== "number") c.reviews = 0;
-        if (typeof c.ef !== "number") c.ef = 2.5;
-        if (typeof c.interval !== "number") c.interval = 0;
-        if (!c.due) c.due = todayKey();
-        if (typeof c.dueAt !== "number") c.dueAt = nowMs();
-        if (typeof c.introduced !== "boolean") c.introduced = false;
-        if (!("introducedOn" in c)) c.introducedOn = null;
-
-        if (!("lastLatencyMs" in c)) c.lastLatencyMs = null;
-        if (!("avgLatencyMs" in c)) c.avgLatencyMs = null;
-        if (!("latencyCount" in c)) c.latencyCount = 0;
-        if (!("latencyHistory" in c)) c.latencyHistory = [];
-
-        if (!("penaltyDateKey" in c)) c.penaltyDateKey = null;
-        if (!("penaltyLevelToday" in c)) c.penaltyLevelToday = 0;
-
-        cards[id] = c;
-      });
-      patched.cards = cards;
-
+      // ensure deck has syn key
       patched.deck = (patched.deck || []).map(d => ({ syn: "", ...d }));
+      // ensure cards object exists
+      if (!patched.cards) patched.cards = {};
       return patched;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -348,7 +118,7 @@ export default function App() {
     if (store.theme === "dark") root.classList.add("dark"); else root.classList.remove("dark");
   }, [store.theme]);
 
-  // Daily introduction of new words
+  // Daily introduction of new words (create per-card progress lazily)
   useEffect(() => {
     const today = todayKey();
     const introducedToday = Object.values(store.cards || {}).filter(c => c.introducedOn === today).length;
@@ -359,13 +129,17 @@ export default function App() {
       const candidates = store.deck.filter(c => !nextCards[c.id]?.introduced).slice(0, need);
       if (candidates.length) {
         candidates.forEach((c) => {
-          const prev = nextCards[c.id] ?? { ef: 2.5, interval: 0, reps: 0, reviews: 0, correct: 0, wrong: 0 };
+          const prev = nextCards[c.id] ?? {
+            ef: 2.5, interval: 0, reps: 0, reviews: 0, correct: 0, wrong: 0,
+            lastLatencyMs: null, avgLatencyMs: null, latencyCount: 0, latencyHistory: [],
+            penaltyDateKey: null, penaltyLevelToday: 0,
+          };
           nextCards[c.id] = {
             ...prev,
             introduced: true,
             introducedOn: today,
             due: today,
-            dueAt: nowMs(),
+            dueAt: Date.now(), // ready now
             interval: 0,
             reps: 0,
             reviews: 0,
@@ -408,7 +182,12 @@ export default function App() {
           )}
           {tab === "flashcards" && (
             <motion.div key="flash" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-              <Flashcards store={store} setStore={setStore} onXP={addXP} />
+              <Flashcards
+                store={store}
+                setStore={setStore}
+                onXP={addXP}
+                ttsSpeak={(text, lang) => ttsSpeak(text, lang, store.tts)}
+              />
             </motion.div>
           )}
           {tab === "quiz" && (
@@ -437,6 +216,45 @@ export default function App() {
       <Footer />
     </div>
   );
+}
+
+/* ===========================
+   TTS helper (prefer Google voices for GT-like sound)
+=========================== */
+function pickBestVoice(voices, lang, preferredKey) {
+  const list = voices.filter(v => (v.lang || "").toLowerCase().startsWith(lang.toLowerCase()));
+  const exact = preferredKey ? list.find(v => `${v.name}__${v.lang}` === preferredKey) : null;
+  if (exact) return exact;
+
+  const score = (v) => {
+    const n = (v.name || "").toLowerCase();
+    let s = 0;
+    if (n.startsWith("google")) s += 5;        // Chrome's Google voices
+    if (n.includes("google")) s += 3;
+    if (/en-us/i.test(v.lang)) s += 2;
+    if (/en-gb|en-au|en-in/i.test(v.lang)) s += 1;
+    if (n.includes("enhanced")) s += 1;
+    return s;
+  };
+  const best = (list.length ? list : voices).slice().sort((a,b)=>score(b)-score(a))[0];
+  return best || null;
+}
+function ttsSpeak(text, lang, tts) {
+  try {
+    const synth = window.speechSynthesis;
+    if (!synth) return;
+    const u = new SpeechSynthesisUtterance(String(text));
+    u.lang = lang;
+    const voices = synth.getVoices?.() || [];
+    const preferredKey = lang.startsWith("th") ? tts?.thVoice : tts?.enVoice;
+    const best = pickBestVoice(voices, lang, preferredKey);
+    if (best) u.voice = best;
+    u.rate = Number(tts?.rate ?? 0.92);
+    u.pitch = Number(tts?.pitch ?? 1.0);
+    u.volume = Number(tts?.volume ?? 1.0);
+    synth.cancel(); // avoid stacking
+    synth.speak(u);
+  } catch {}
 }
 
 /* ===========================
@@ -582,7 +400,6 @@ function Badge({ icon: Icon, text }) {
 
 function Stats({ store, goalPct }) {
   const today = todayKey();
-  const todayXP = store.calendar[today] ?? 0;
   const last7 = useMemo(() => {
     const arr = [];
     for (let i = 6; i >= 0; i--) { const d = new Date(); d.setDate(d.getDate() - i); const k = toKeyDate(d); arr.push({ day: k.slice(5), xp: store.calendar[k] ?? 0 }); }
@@ -605,7 +422,7 @@ function Stats({ store, goalPct }) {
           <Star className="size-6 text-yellow-300" />
           <div>
             <div className="text-sm text-slate-400">Today's goal</div>
-            <div className="text-2xl font-bold">{todayXP}/{store.goal} XP</div>
+            <div className="text-2xl font-bold">{store.calendar[today] ?? 0}/{store.goal} XP</div>
           </div>
           <div className="ml-auto"><GoalRing pct={goalPct} /></div>
         </div>
@@ -653,226 +470,6 @@ function QSItem({ icon: Icon, title, desc, onClick }) {
   );
 }
 
-/* ===========================
-   Flashcards (timer + penalties + previews)
-=========================== */
-function Flashcards({ store, setStore, onXP }) {
-  const dueCards = useMemo(
-    () =>
-      store.deck.filter((c) => {
-        const p = store.cards[c.id] ?? {};
-        if (!p.introduced) return false;
-        if (typeof p.dueAt === "number") return p.dueAt <= Date.now();
-        return (p.due ?? todayKey()) <= todayKey();
-      }),
-    [store.deck, store.cards]
-  );
-
-  const [idx, setIdx] = useState(0);
-  const card = dueCards[0];
-  const [show, setShow] = useState(false);
-
-  // latency capture
-  const viewStartRef = useRef(null);
-  const measuredLatencyRef = useRef(null);
-
-  // reset timer + UI when card changes
-  useEffect(() => {
-    setShow(false);
-    measuredLatencyRef.current = null;
-    viewStartRef.current = Date.now();
-  }, [card?.id]);
-
-  // Clamp index when list changes
-  useEffect(() => {
-    if (!dueCards.length) setIdx(0);
-    else if (idx > dueCards.length - 1) setIdx(dueCards.length - 1);
-  }, [dueCards.length, idx]);
-
-  if (!dueCards.length) {
-    return (
-      <Card>
-        <div className="flex items-center gap-3">
-          <CheckCircle2 className="size-6 text-emerald-400" />
-          <div>
-            <div className="font-semibold">All caught up for today</div>
-            <div className="text-slate-300 text-sm">Come back later or add new words.</div>
-          </div>
-        </div>
-      </Card>
-    );
-  }
-
-  const leftCount = Math.max(0, dueCards.length - 1);
-  const positionLabel = `1/${dueCards.length}`;
-  const prog = store.cards[card.id];
-
-  // Stop timer on "Show translation"
-  function onShowTranslation() {
-    if (measuredLatencyRef.current == null && viewStartRef.current != null) {
-      measuredLatencyRef.current = Date.now() - viewStartRef.current;
-    }
-    setShow(true);
-  }
-
-  function updateLatencyStats(updated, latency) {
-    const hist = Array.isArray(updated.latencyHistory) ? [...updated.latencyHistory] : [];
-    hist.push(latency);
-    while (hist.length > 10) hist.shift();
-    const count = (updated.latencyCount || 0) + 1;
-    const avg = Number.isFinite(updated.avgLatencyMs) ? ((updated.avgLatencyMs * (count - 1) + latency) / count) : latency;
-    return { ...updated, lastLatencyMs: latency, avgLatencyMs: avg, latencyCount: count, latencyHistory: hist };
-  }
-
-  function applyGrade(grade) {
-    // stop timer if still running
-    let latency = measuredLatencyRef.current;
-    if (latency == null && viewStartRef.current != null) {
-      latency = Date.now() - viewStartRef.current;
-      measuredLatencyRef.current = latency;
-    }
-
-    // compute next schedule
-    const next = computeNext(prog, grade, {
-      intervals: store.intervals,
-      day1: store.day1,
-      day2: store.day2,
-      timing: store.timing,
-    }, latency);
-
-    // build updated progress
-    let updated = {
-      ...prog,
-      ...next,
-      correct: prog.correct + (grade === "good" || grade === "easy" ? 1 : 0),
-      wrong: prog.wrong + (grade === "again" || grade === "hard" ? 1 : 0),
-      reviews: (prog.reviews || 0) + 1,
-    };
-
-    // Day-3+ penalty logic
-    const stage = baseStageFor(prog);
-    const today = todayKey();
-    if (stage === "day3plus") {
-      if (grade === "again") {
-        const sameDay = prog.penaltyDateKey === today;
-        const level = sameDay ? Math.min(10, (prog.penaltyLevelToday || 0) + 1) : 1;
-        updated.penaltyDateKey = today;
-        updated.penaltyLevelToday = level;
-      } else {
-        updated.penaltyDateKey = today;
-        updated.penaltyLevelToday = 0;
-      }
-    } else {
-      updated.penaltyDateKey = today;
-      updated.penaltyLevelToday = 0;
-    }
-
-    // attach latency stats
-    if (Number.isFinite(latency)) {
-      updated = updateLatencyStats(updated, latency);
-    }
-
-    setStore((s) => ({ ...s, cards: { ...s.cards, [card.id]: updated } }));
-    onXP(grade === "good" || grade === "easy" ? 10 : 4);
-    setShow(false);
-    setIdx(0);
-  }
-
-  // Previews (use lastLatencyMs for Day-3+ timing hint)
-  const settingsPack = { intervals: store.intervals, day1: store.day1, day2: store.day2, timing: store.timing };
-  const lblAgain = previewLabel(prog, "again", settingsPack);
-  const lblHard  = previewLabel(prog, "hard",  settingsPack);
-  const lblGood  = previewLabel(prog, "good",  settingsPack);
-  const lblEasy  = previewLabel(prog, "easy",  settingsPack);
-
-  // "Due in" display
-  const dueInText = (() => {
-    const delta = Math.max(0, (prog?.dueAt ?? Date.now()) - Date.now());
-    const val = delta ? humanizeMs(delta) : "0m";
-    return val;
-  })();
-
-  return (
-    <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      <div className="lg:col-span-2">
-        <div className="rounded-3xl border border-white/10 bg-white/5 p-6 min-h-[60dvh] sm:min-h-[320px] flex flex-col">
-          <div className="flex items-center justify-between text-sm text-slate-300">
-            <span>Card {positionLabel}</span>
-            <span>Left in queue now: <b>{Math.max(0, dueCards.length - 1)}</b></span>
-          </div>
-
-          <div className="mt-2 text-4xl font-extrabold tracking-tight break-words">{card.en}</div>
-          <div className="text-sm text-slate-400">{card.pos}</div>
-
-          {!show && (
-            <div className="mt-6">
-              <button
-                onClick={() => ttsSpeak(card.en, "en-US", store.tts)}
-                className="inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm"
-              >
-                <Volume2 className="size-4" /> Listen (EN)
-              </button>
-            </div>
-          )}
-
-          <AnimatePresence>
-            {show && (
-              <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-6 space-y-2">
-                <div className="text-xl">{card.th}</div>
-                {card.example ? <div className="text-sm text-slate-300">Example: <i>{card.example}</i></div> : null}
-                {card.syn ? <div className="text-sm text-emerald-200/90"><span className="font-semibold">Synonyms:</span> {card.syn}</div> : null}
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          <div className="mt-auto pt-6 space-y-3">
-            <button
-              onClick={onShowTranslation}
-              className="w-full sm:w-auto rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-3 text-center"
-            >
-              Show translation
-            </button>
-
-            <div className="grid grid-cols-4 gap-2">
-              <button onClick={() => applyGrade("again")} className="w-full rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3">Again ({lblAgain})</button>
-              <button onClick={() => applyGrade("hard")}  className="w-full rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3">Hard ({lblHard})</button>
-              <button onClick={() => applyGrade("good")}  className="w-full rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-3">Good ({lblGood})</button>
-              <button onClick={() => applyGrade("easy")}  className="w-full rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-3">Easy ({lblEasy})</button>
-            </div>
-
-            <div className="text-xs text-slate-400 pt-1">
-              Next due for this card: <b>{dueInText}</b>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div>
-        <Card>
-          <div className="text-sm text-slate-400">This word</div>
-          <div className="mt-2 grid grid-cols-3 gap-2 text-center">
-            <div className="rounded-xl bg-white/5 p-3">
-              <div className="text-xs text-slate-400">Correct</div>
-              <div className="text-xl font-bold">{store.cards[card.id]?.correct ?? 0}</div>
-            </div>
-            <div className="rounded-xl bg-white/5 p-3">
-              <div className="text-xs text-slate-400">Wrong</div>
-              <div className="text-xl font-bold">{store.cards[card.id]?.wrong ?? 0}</div>
-            </div>
-            <div className="rounded-xl bg-white/5 p-3">
-              <div className="text-xs text-slate-400">EF</div>
-              <div className="text-xl font-bold">{(store.cards[card.id]?.ef ?? 2.5).toFixed(2)}</div>
-            </div>
-          </div>
-        </Card>
-      </div>
-    </section>
-  );
-}
-
-/* ===========================
-   Progress Summary
-=========================== */
 function ProgressSection({ store }) {
   const days = Object.keys(store.calendar).sort();
   const totalXP = days.reduce((sum, k) => sum + (store.calendar[k] || 0), 0);
@@ -899,15 +496,4 @@ function Footer() {
       </div>
     </footer>
   );
-}
-
-/* ===========================
-   Dev tests (console)
-=========================== */
-function runDevTests() {
-  try { console.log("[EN Trainer] Dev tests loaded"); } catch (e) { console.error("[EN Trainer] Dev tests failed", e); }
-}
-if (typeof window !== "undefined" && !window.__EN_TRAINER_TESTED__) {
-  window.__EN_TRAINER_TESTED__ = true;
-  runDevTests();
 }
