@@ -24,14 +24,10 @@ const toKeyDate = (d = new Date()) => {
 const fromKeyDate = (k) => { const [y, m, d] = k.split("-").map(Number); return new Date(y, m - 1, d); };
 const todayKey = () => toKeyDate();
 const nowMs = () => Date.now();
-const endOfTodayMs = () => {
-  const d = new Date();
-  d.setHours(23, 59, 59, 999);
-  return d.getTime();
-};
+const endOfTodayMs = () => { const d = new Date(); d.setHours(23,59,59,999); return d.getTime(); };
 const MS = { min: 60_000, hour: 3_600_000, day: 86_400_000 };
 
-/* Humanize durations like 5m / 2h / 3d */
+/* Durations like 5m / 2h / 3d */
 function humanizeMs(ms) {
   if (ms < MS.hour) return `${Math.max(1, Math.round(ms / MS.min))}m`;
   if (ms < MS.day) return `${Math.max(1, Math.round(ms / MS.hour))}h`;
@@ -57,7 +53,7 @@ const DEFAULT_DECK = [
 /* ===========================
    Persistence
 =========================== */
-const LS_KEY = "th_en_learning_v2";
+const LS_KEY = "th_en_learning_v3";
 function loadState() { try { const raw = localStorage.getItem(LS_KEY); return raw ? JSON.parse(raw) : null; } catch { return null; } }
 function saveState(state) { try { localStorage.setItem(LS_KEY, JSON.stringify(state)); } catch {} }
 function usePersistentState(defaults) {
@@ -72,9 +68,9 @@ function usePersistentState(defaults) {
 const initCardProgress = (deck) => Object.fromEntries(
   deck.map((c) => [c.id, {
     ef: 2.5,
-    interval: 0,         // days (SM-2)
-    due: todayKey(),     // legacy (by day)
-    dueAt: nowMs(),      // precise timestamp
+    interval: 0,
+    due: todayKey(),     // by day (legacy)
+    dueAt: nowMs(),      // precise
     correct: 0,
     wrong: 0,
     reps: 0,             // SM-2 internal reps
@@ -82,15 +78,15 @@ const initCardProgress = (deck) => Object.fromEntries(
     introduced: false,
     introducedOn: null,
 
-    // day-stage override (used when Day-3+ gets "Again")
-    stageOverride: null,            // e.g., "day2"
-    stageOverrideUntil: null,       // timestamp (end of today)
-
-    // timing stats (hidden)
+    // timing stats
     lastLatencyMs: null,
     avgLatencyMs: null,
     latencyCount: 0,
-    latencyHistory: [],  // ring buffer-ish
+    latencyHistory: [],  // light ring buffer (cap 10)
+
+    // Day-3+ "Again" penalty per day
+    penaltyDateKey: null,      // YYYY-MM-DD of penalties
+    penaltyLevelToday: 0,      // 0,1,2+ (reduces H/G/E previews on Day-3+)
   }])
 );
 
@@ -99,9 +95,7 @@ const initCardProgress = (deck) => Object.fromEntries(
 =========================== */
 function sm2Step(progress, quality, baseIntervals) {
   let { ef = 2.5, interval = 0, reps = 0 } = progress;
-  // EF update (SM-2)
   ef = Math.max(1.3, ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)));
-
   if (quality < 3) {
     interval = Math.max(1, Number(baseIntervals?.hard ?? 1));
     reps = 0;
@@ -121,10 +115,6 @@ function sm2Step(progress, quality, baseIntervals) {
 
 /* ===========================
    Stage resolution (by calendar day)
-   - day1: today === introducedOn
-   - day2: today === introducedOn + 1 day
-   - day3plus: otherwise
-   - override: day2 for rest of today if set (from Day-3+ "Again")
 =========================== */
 function baseStageFor(prog) {
   const intro = prog?.introducedOn;
@@ -137,99 +127,135 @@ function baseStageFor(prog) {
   if (diffDays === 1) return "day2";
   return "day3plus";
 }
-function resolveStage(prog) {
-  const now = nowMs();
-  if (prog?.stageOverride === "day2" && typeof prog?.stageOverrideUntil === "number" && now <= prog.stageOverrideUntil) {
-    return "day2";
+
+/* ===========================
+   Timing factor (Day-3+ only)
+   - fast (<= fastMs) => clampMax (e.g., 1.25)
+   - slow (>= slowMs) => clampMin (e.g., 0.75)
+   - linear blend in between
+=========================== */
+function computeTimingFactor(latencyMs, timing) {
+  const fast = Math.max(0, Number(timing?.fastMs ?? 5000));
+  const slow = Math.max(fast + 1, Number(timing?.slowMs ?? 25000));
+  const clampMin = Number(timing?.clampMin ?? 0.75);
+  const clampMax = Number(timing?.clampMax ?? 1.25);
+  if (!Number.isFinite(latencyMs)) return 1.0;
+  if (latencyMs <= fast) return clampMax;
+  if (latencyMs >= slow) return clampMin;
+  const t = (latencyMs - fast) / (slow - fast); // 0..1
+  const mul = clampMax + (clampMin - clampMax) * t;
+  return Math.max(clampMin, Math.min(clampMax, mul));
+}
+
+/* ===========================
+   Penalty multipliers for Day-3+ (after "Again" today)
+=========================== */
+function penaltyMultiplier(level, grade) {
+  if (level <= 0) return 1;
+  if (level === 1) {
+    if (grade === "hard") return 0.40;
+    if (grade === "good") return 0.60;
+    if (grade === "easy") return 0.60;
   }
-  return baseStageFor(prog);
+  // level >= 2
+  if (grade === "hard") return 0.25;
+  if (grade === "good") return 0.50;
+  if (grade === "easy") return 0.50;
+  return 1;
 }
 
 /* ===========================
-   Timing factor (hidden)
-   - fast → closer to clampMax
-   - slow → closer to clampMin
-   - linear interpolation between fastMs and slowMs
+   Compute Next scheduling (uses stage + timing + penalty)
 =========================== */
-function timingFactor(latencyMs, timing) {
-  const { fastMs = 5000, slowMs = 25000, clampMin = 0.75, clampMax = 1.25 } = timing || {};
-  if (!latencyMs || latencyMs <= 0) return 1.0;
-  if (latencyMs <= fastMs) return clampMax;
-  if (latencyMs >= slowMs) return clampMin;
-  const r = (latencyMs - fastMs) / Math.max(1, slowMs - fastMs); // 0..1
-  const val = clampMax + (clampMin - clampMax) * r;
-  return Math.max(Math.min(val, clampMax), clampMin);
-}
+function computeNext(progress, grade, settings, latencyHintMs) {
+  const { intervals, day1, day2, timing } = settings;
+  const stage = baseStageFor(progress);
 
-/* ===========================
-   Spaced scheduling by stage:
-   - Day-1 custom (5m/10m/1d/2d)
-   - Day-2 custom (5m/15m/1d/2d)
-   - Day-3+ SM-2 + growth multipliers + timing factor
-=========================== */
-function computeNext(progress, grade, store, observedLatencyMs) {
-  const { intervals, day1, secondReview, multiplier3Plus, timing } = store;
-  const stage = resolveStage(progress);
   const mkDue = (deltaMs) => {
     const dueAt = nowMs() + (deltaMs || MS.day);
     return { dueAt, due: toKeyDate(new Date(dueAt)) };
   };
 
-  // Day-1 (today == introducedOn)
+  // ALWAYS: "Again" reduces EF slightly and drops reps a bit.
+  const dropEF = (ef, amount) => Math.max(1.3, (ef || 2.5) - amount);
+  const dropReps = (reps) => Math.max(0, (reps || 0) - 1);
+
+  // DAY 1 rules
   if (stage === "day1") {
-    if (grade === "again") return { ...progress, interval: 0, reps: Math.max(0, (progress.reps || 0) - 1), ef: Math.max(1.3, (progress.ef || 2.5) - 0.15), ...mkDue((day1?.againMins ?? 5) * MS.min) };
-    if (grade === "hard")  return { ...progress, interval: 0, reps: 0, ef: Math.max(1.3, (progress.ef || 2.5) - 0.05), ...mkDue((day1?.hardMins ?? 10) * MS.min) };
-    if (grade === "good")  { const step = sm2Step(progress, 4, intervals); const d = Math.max(1, day1?.goodDays ?? 1); return { ...step, interval: d, ...mkDue(d * MS.day) }; }
-    if (grade === "easy")  { const step = sm2Step(progress, 5, intervals); const d = Math.max(1, day1?.easyDays ?? 2); return { ...step, interval: d, ...mkDue(d * MS.day) }; }
+    if (grade === "again") {
+      const mins = Math.max(1, Number(day1?.againMins ?? 5));
+      return { ef: dropEF(progress.ef, 0.15), interval: 0, reps: dropReps(progress.reps), reviews: progress.reviews, ...mkDue(mins * MS.min) };
+    }
+    if (grade === "hard") {
+      const mins = Math.max(1, Number(day1?.hardMins ?? 10));
+      return { ef: dropEF(progress.ef, 0.05), interval: 0, reps: Math.max(0, progress.reps || 0), reviews: progress.reviews, ...mkDue(mins * MS.min) };
+    }
+    if (grade === "good") {
+      const step = sm2Step(progress, 4, intervals);
+      return { ...step, reviews: progress.reviews, ...mkDue(Math.max(1, Number(day1?.goodDays ?? 1)) * MS.day), interval: Math.max(1, Number(day1?.goodDays ?? 1)) };
+    }
+    if (grade === "easy") {
+      const step = sm2Step(progress, 5, intervals);
+      return { ...step, reviews: progress.reviews, ...mkDue(Math.max(1, Number(day1?.easyDays ?? 2)) * MS.day), interval: Math.max(1, Number(day1?.easyDays ?? 2)) };
+    }
   }
 
-  // Day-2
+  // DAY 2 rules
   if (stage === "day2") {
-    if (grade === "again") return { ...progress, interval: 0, reps: Math.max(0, (progress.reps || 0) - 1), ef: Math.max(1.3, (progress.ef || 2.5) - 0.15), ...mkDue((secondReview?.againMins ?? 5) * MS.min) };
-    if (grade === "hard")  return { ...progress, interval: 0, reps: Math.max(0, (progress.reps || 0)), ef: Math.max(1.3, (progress.ef || 2.5) - 0.05), ...mkDue((secondReview?.hardMins ?? 15) * MS.min) };
-    if (grade === "good")  { const step = sm2Step(progress, 4, intervals); const d = Math.max(1, secondReview?.goodDays ?? 1); return { ...step, interval: d, ...mkDue(d * MS.day) }; }
-    if (grade === "easy")  { const step = sm2Step(progress, 5, intervals); const d = Math.max(1, secondReview?.easyDays ?? 2); return { ...step, interval: d, ...mkDue(d * MS.day) }; }
+    if (grade === "again") {
+      const mins = Math.max(1, Number(day2?.againMins ?? 5));
+      return { ef: dropEF(progress.ef, 0.15), interval: 0, reps: dropReps(progress.reps), reviews: progress.reviews, ...mkDue(mins * MS.min) };
+    }
+    if (grade === "hard") {
+      // Your change: 15m on Day-2
+      const mins = Math.max(1, Number(day2?.hardMins ?? 15));
+      return { ef: dropEF(progress.ef, 0.05), interval: 0, reps: Math.max(0, progress.reps || 0), reviews: progress.reviews, ...mkDue(mins * MS.min) };
+    }
+    if (grade === "good") {
+      const step = sm2Step(progress, 4, intervals);
+      return { ...step, reviews: progress.reviews, ...mkDue(Math.max(1, Number(day2?.goodDays ?? 1)) * MS.day), interval: Math.max(1, Number(day2?.goodDays ?? 1)) };
+    }
+    if (grade === "easy") {
+      const step = sm2Step(progress, 5, intervals);
+      return { ...step, reviews: progress.reviews, ...mkDue(Math.max(1, Number(day2?.easyDays ?? 2)) * MS.day), interval: Math.max(1, Number(day2?.easyDays ?? 2)) };
+    }
   }
 
-  // Day-3+ (performance-based)
+  // DAY 3+ rules
   if (grade === "again") {
-    // still short minutes (and caller will set override->day2 for today)
-    const mins = Number(secondReview?.againMins ?? 5);
-    return { ...progress, interval: 0, reps: Math.max(0, (progress.reps || 0) - 1), ef: Math.max(1.3, (progress.ef || 2.5) - 0.15), ...mkDue(mins * MS.min) };
+    // fixed 15m
+    return { ef: dropEF(progress.ef, 0.15), interval: 0, reps: dropReps(progress.reps), reviews: progress.reviews, ...mkDue(15 * MS.min) };
   }
 
-  const q = grade === "hard" ? 2 : grade === "good" ? 4 : 5; // map to SM-2 quality
-  const base = sm2Step(progress, q, intervals); // days
-  const curve = (grade === "hard" ? multiplier3Plus?.hard
-                : grade === "good" ? multiplier3Plus?.good
-                : multiplier3Plus?.easy) || { start: 1, growth: 1.08, min: 0.5, max: 10 };
+  // Hard/Good/Easy base by SM-2
+  const quality = grade === "hard" ? 2 : grade === "good" ? 4 : 5;
+  const base = sm2Step(progress, quality, intervals); // base days (integer)
+  // timing factor (based on measured latency if provided; else fallback to lastLatency)
+  const tf = computeTimingFactor(
+    Number.isFinite(latencyHintMs) ? latencyHintMs : (progress.lastLatencyMs ?? (settings?.timing?.fastMs ?? 5000)),
+    timing
+  );
+  let days = Math.max(1, Math.round(base.interval * tf));
 
-  const reviewsSoFar = Math.max(0, Number(progress.reviews || 0));
-  const reviewN = Math.max(3, reviewsSoFar + 1); // 3rd+ logical index
-  const multRaw = Number(curve.start ?? 1) * Math.pow(Number(curve.growth ?? 1), reviewN - 3);
-  const mult = Math.max(Number(curve?.min ?? 0.5), Math.min(multRaw, Number(curve?.max ?? 10)));
+  // penalty multipliers if there were 'Again's earlier today on Day-3+
+  const today = todayKey();
+  const level = (progress.penaltyDateKey === today) ? (progress.penaltyLevelToday || 0) : 0;
+  const pMul = penaltyMultiplier(level, grade);
+  days = Math.max(1, Math.round(days * pMul));
 
-  // Hidden timing → factor
-  const tf = timingFactor(observedLatencyMs, timing);
-  const nextDays = Math.max(1, Math.round(base.interval * mult * tf));
-
-  return {
-    ef: base.ef,
-    interval: nextDays,
-    reps: base.reps,
-    ...mkDue(nextDays * MS.day),
-  };
+  return { ef: base.ef, interval: days, reps: base.reps, reviews: progress.reviews, ...mkDue(days * MS.day) };
 }
 
-/* Preview label for buttons (non-mutating) */
-function previewLabel(progress, grade, store) {
-  const simulated = computeNext(progress, grade, store, /*latency*/ null);
+/* Preview label for buttons */
+function previewLabel(progress, grade, settings) {
+  // Use lastLatencyMs as a hint for Day-3+ previews
+  const simulated = computeNext(progress, grade, settings, progress.lastLatencyMs ?? (settings?.timing?.fastMs ?? 5000));
   const delta = Math.max(1, simulated.dueAt - nowMs());
   return humanizeMs(delta);
 }
 
 /* ===========================
-   TTS helper (better voices + settings)
+   TTS helper
 =========================== */
 function pickBestVoice(voices, lang, preferredName) {
   const list = voices.filter(v => (v.lang || "").toLowerCase().startsWith(lang.toLowerCase()));
@@ -274,55 +300,23 @@ export default function App() {
     lastActive: null,
     calendar: {},
     quizHistory: [],
-    intervals: { easy: 3, good: 2, hard: 1 }, // base days for SM-2 (3rd+)
+    intervals: { easy: 3, good: 2, hard: 1 },
     dailyNew: 10,
-
-    // Day-1 defaults
     day1: { againMins: 5, hardMins: 10, goodDays: 1, easyDays: 2 },
-
-    // Day-2 defaults (note: hardMins = 15m per your change)
-    secondReview: { againMins: 5, hardMins: 15, goodDays: 1, easyDays: 2 },
-
-    // Day-3+ curve
-    multiplier3Plus: {
-      againMins: 5, // not used here (we reuse again=5m anyway)
-      hard: { start: 0.9, growth: 1.05, min: 0.5, max: 10 },
-      good: { start: 1.0, growth: 1.08, min: 0.5, max: 10 },
-      easy: { start: 1.2, growth: 1.12, min: 0.5, max: 10 },
-    },
-
-    // Hidden timing tuner (Settings → Timing)
+    day2: { againMins: 5, hardMins: 15, goodDays: 1, easyDays: 2 }, // your change
     timing: { fastMs: 5000, slowMs: 25000, clampMin: 0.75, clampMax: 1.25 },
-
-    tts: {
-      enVoice: "", thVoice: "",
-      rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false
-    }
+    tts: { enVoice: "", thVoice: "", rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false }
   });
 
   // Patch older saves to include new keys
   useEffect(() => {
     setStore((s) => {
       const patched = { ...s };
-
       if (!patched.intervals) patched.intervals = { easy: 3, good: 2, hard: 1 };
       if (typeof patched.dailyNew !== "number") patched.dailyNew = 10;
-
       if (!patched.day1) patched.day1 = { againMins: 5, hardMins: 10, goodDays: 1, easyDays: 2 };
-      if (!patched.secondReview) patched.secondReview = { againMins: 5, hardMins: 15, goodDays: 1, easyDays: 2 };
-      // If old value was 10, migrate to 15 by default (only if exactly 10)
-      if (patched?.secondReview?.hardMins === 10) patched.secondReview.hardMins = 15;
-
-      if (!patched.multiplier3Plus) {
-        patched.multiplier3Plus = {
-          againMins: 5,
-          hard: { start: 0.9, growth: 1.05, min: 0.5, max: 10 },
-          good: { start: 1.0, growth: 1.08, min: 0.5, max: 10 },
-          easy: { start: 1.2, growth: 1.12, min: 0.5, max: 10 },
-        };
-      }
+      if (!patched.day2) patched.day2 = { againMins: 5, hardMins: 15, goodDays: 1, easyDays: 2 };
       if (!patched.timing) patched.timing = { fastMs: 5000, slowMs: 25000, clampMin: 0.75, clampMax: 1.25 };
-
       if (!patched.tts) patched.tts = { enVoice: "", thVoice: "", rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false };
 
       const cards = { ...(patched.cards || {}) };
@@ -337,18 +331,19 @@ export default function App() {
         if (typeof c.introduced !== "boolean") c.introduced = false;
         if (!("introducedOn" in c)) c.introducedOn = null;
 
-        if (!("stageOverride" in c)) c.stageOverride = null;
-        if (!("stageOverrideUntil" in c)) c.stageOverrideUntil = null;
-
         if (!("lastLatencyMs" in c)) c.lastLatencyMs = null;
         if (!("avgLatencyMs" in c)) c.avgLatencyMs = null;
         if (!("latencyCount" in c)) c.latencyCount = 0;
         if (!("latencyHistory" in c)) c.latencyHistory = [];
+
+        if (!("penaltyDateKey" in c)) c.penaltyDateKey = null;
+        if (!("penaltyLevelToday" in c)) c.penaltyLevelToday = 0;
+
         cards[id] = c;
       });
       patched.cards = cards;
 
-      // Ensure each deck item has syn field
+      // ensure syn field on deck
       patched.deck = (patched.deck || []).map(d => ({ syn: "", ...d }));
       return patched;
     });
@@ -392,8 +387,8 @@ export default function App() {
             interval: 0,
             reps: 0,
             reviews: 0,
-            stageOverride: null,
-            stageOverrideUntil: null,
+            penaltyDateKey: null,
+            penaltyLevelToday: 0,
           };
         });
         setStore((s) => ({ ...s, cards: nextCards }));
@@ -677,7 +672,7 @@ function QSItem({ icon: Icon, title, desc, onClick }) {
 }
 
 /* ===========================
-   Flashcards (stage-based + hidden timing)
+   Flashcards (timer + penalties + previews)
 =========================== */
 function Flashcards({ store, setStore, onXP }) {
   const dueCards = useMemo(
@@ -695,13 +690,15 @@ function Flashcards({ store, setStore, onXP }) {
   const card = dueCards[0];
   const [show, setShow] = useState(false);
 
-  // Hidden latency start when card appears
-  const [viewStartAt, setViewStartAt] = useState(null);
+  // latency capture
+  const viewStartRef = useRef(null);
+  const measuredLatencyRef = useRef(null);
 
-  // Reset translation + start timer when card changes
+  // reset timer + UI when card changes
   useEffect(() => {
     setShow(false);
-    setViewStartAt(card ? nowMs() : null);
+    measuredLatencyRef.current = null;
+    viewStartRef.current = Date.now();
   }, [card?.id]);
 
   // Clamp index when list changes
@@ -728,44 +725,73 @@ function Flashcards({ store, setStore, onXP }) {
   const positionLabel = `1/${dueCards.length}`;
   const prog = store.cards[card.id];
 
-  function updateLatencyStats(p, latencyMs) {
-    const hist = Array.isArray(p.latencyHistory) ? [...p.latencyHistory] : [];
-    hist.push(latencyMs);
-    if (hist.length > 20) hist.shift();
-    const n = (p.latencyCount || 0) + 1;
-    const avg = p.avgLatencyMs == null
-      ? latencyMs
-      : Math.round(((p.avgLatencyMs * (p.latencyCount || 0)) + latencyMs) / n);
-    return {
-      lastLatencyMs: latencyMs,
-      avgLatencyMs: avg,
-      latencyCount: n,
-      latencyHistory: hist
-    };
+  // Stop timer on "Show translation"
+  function onShowTranslation() {
+    if (measuredLatencyRef.current == null && viewStartRef.current != null) {
+      measuredLatencyRef.current = Date.now() - viewStartRef.current;
+    }
+    setShow(true);
+  }
+
+  function updateLatencyStats(updated, latency) {
+    const hist = Array.isArray(updated.latencyHistory) ? [...updated.latencyHistory] : [];
+    hist.push(latency);
+    while (hist.length > 10) hist.shift();
+    const count = (updated.latencyCount || 0) + 1;
+    const avg = Number.isFinite(updated.avgLatencyMs) ? ((updated.avgLatencyMs * (count - 1) + latency) / count) : latency;
+    return { ...updated, lastLatencyMs: latency, avgLatencyMs: avg, latencyCount: count, latencyHistory: hist };
   }
 
   function applyGrade(grade) {
-    const latencyMs = viewStartAt ? Math.max(0, nowMs() - viewStartAt) : null;
+    // stop timer if still running
+    let latency = measuredLatencyRef.current;
+    if (latency == null && viewStartRef.current != null) {
+      latency = Date.now() - viewStartRef.current;
+      measuredLatencyRef.current = latency;
+    }
 
-    // compute next schedule using stage + timing
-    const nextCalc = computeNext(prog, grade, store, latencyMs);
+    // compute next schedule (uses latency only on Day-3+ H/G/E)
+    const next = computeNext(prog, grade, {
+      intervals: store.intervals,
+      day1: store.day1,
+      day2: store.day2,
+      timing: store.timing,
+    }, latency);
 
-    // Day-3+ → Again sets override back to Day-2 for rest of the day
-    const baseStage = baseStageFor(prog);
-    const willSetDay2Override = (baseStage === "day3plus" && grade === "again");
-
-    const updated = {
+    // build updated progress
+    let updated = {
       ...prog,
-      ...nextCalc,
+      ...next,
       correct: prog.correct + (grade === "good" || grade === "easy" ? 1 : 0),
       wrong: prog.wrong + (grade === "again" || grade === "hard" ? 1 : 0),
-      reviews: (prog.reviews || 0) + 1, // this action just happened
-      ...(latencyMs != null ? updateLatencyStats(prog, latencyMs) : {}),
-
-      ...(willSetDay2Override
-        ? { stageOverride: "day2", stageOverrideUntil: endOfTodayMs() }
-        : {})
+      reviews: (prog.reviews || 0) + 1,
     };
+
+    // Day-3+ penalty logic
+    const stage = baseStageFor(prog);
+    const today = todayKey();
+    if (stage === "day3plus") {
+      if (grade === "again") {
+        // increment penalty level for today
+        const sameDay = prog.penaltyDateKey === today;
+        const level = sameDay ? Math.min(10, (prog.penaltyLevelToday || 0) + 1) : 1;
+        updated.penaltyDateKey = today;
+        updated.penaltyLevelToday = level;
+      } else {
+        // reset penalties on non-Again
+        updated.penaltyDateKey = today;
+        updated.penaltyLevelToday = 0;
+      }
+    } else {
+      // Day-1 / Day-2: ignore penalties
+      updated.penaltyDateKey = today;
+      updated.penaltyLevelToday = 0;
+    }
+
+    // attach latency stats (always store whatever we measured)
+    if (Number.isFinite(latency)) {
+      updated = updateLatencyStats(updated, latency);
+    }
 
     setStore((s) => ({ ...s, cards: { ...s.cards, [card.id]: updated } }));
     onXP(grade === "good" || grade === "easy" ? 10 : 4);
@@ -773,13 +799,14 @@ function Flashcards({ store, setStore, onXP }) {
     setIdx(0);
   }
 
-  // Previews for button labels (use same scheduler for the current stage)
-  const lblAgain = previewLabel(prog, "again", store);
-  const lblHard  = previewLabel(prog, "hard",  store);
-  const lblGood  = previewLabel(prog, "good",  store);
-  const lblEasy  = previewLabel(prog, "easy",  store);
+  // Previews (use lastLatencyMs for Day-3+ timing hint)
+  const settingsPack = { intervals: store.intervals, day1: store.day1, day2: store.day2, timing: store.timing };
+  const lblAgain = previewLabel(prog, "again", settingsPack);
+  const lblHard  = previewLabel(prog, "hard",  settingsPack);
+  const lblGood  = previewLabel(prog, "good",  settingsPack);
+  const lblEasy  = previewLabel(prog, "easy",  settingsPack);
 
-  // "Due in" display
+  // "Due in" display (for sidebar)
   const dueInText = (() => {
     const delta = Math.max(0, (prog?.dueAt ?? nowMs()) - nowMs());
     const val = delta ? humanizeMs(delta) : "0m";
@@ -821,7 +848,7 @@ function Flashcards({ store, setStore, onXP }) {
 
           <div className="mt-auto pt-6 space-y-3">
             <button
-              onClick={() => setShow(true)}
+              onClick={onShowTranslation}
               className="w-full sm:w-auto rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 px-4 py-3 text-center"
             >
               Show translation
@@ -885,7 +912,7 @@ function ProgressSection({ store }) {
 }
 
 /* ===========================
-   Listening Lab (uses improved TTS)
+   Listening Lab (unchanged)
 =========================== */
 function ListeningLab({ store, onXP }) {
   const [source, setSource] = useState("deck");
@@ -1100,11 +1127,7 @@ function Footer() {
    Dev tests (console)
 =========================== */
 function runDevTests() {
-  try {
-    console.log("[EN Trainer] Dev tests loaded");
-  } catch (e) {
-    console.error("[EN Trainer] Dev tests failed", e);
-  }
+  try { console.log("[EN Trainer] Dev tests loaded"); } catch (e) { console.error("[EN Trainer] Dev tests failed", e); }
 }
 if (typeof window !== "undefined" && !window.__EN_TRAINER_TESTED__) {
   window.__EN_TRAINER_TESTED__ = true;

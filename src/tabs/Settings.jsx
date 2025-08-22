@@ -2,7 +2,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { CalendarCheck2, Sparkles } from "lucide-react";
 
-/* Local helpers (duplicated small utils for this file) */
 const classNames = (...a) => a.filter(Boolean).join(" ");
 const toKeyDate = (d = new Date()) => {
   const y = d.getFullYear();
@@ -11,11 +10,205 @@ const toKeyDate = (d = new Date()) => {
   return `${y}-${m}-${day}`;
 };
 const todayKey = () => toKeyDate();
-const nowMs = () => Date.now();
 
-function Card({ children }) { return (<div className="rounded-3xl border border-white/10 bg-white/5 p-4">{children}</div>); }
+function Card({ children }) {
+  return <div className="rounded-3xl border border-white/10 bg-white/5 p-4">{children}</div>;
+}
 
-/* CSV parser */
+export default function Settings({ store, setStore }) {
+  const [tab, setTab] = useState("general"); // general | day1 | audio | import | manage | timing
+
+  return (
+    <Card>
+      <div className="text-lg font-bold mb-4">Settings</div>
+      <div className="flex gap-2 mb-4 flex-wrap">
+        <button onClick={()=>setTab("general")} className={classNames("px-3 py-2 rounded", tab==="general"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>General</button>
+        <button onClick={()=>setTab("day1")} className={classNames("px-3 py-2 rounded", tab==="day1"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Day-1 & Day-2</button>
+        <button onClick={()=>setTab("timing")} className={classNames("px-3 py-2 rounded", tab==="timing"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Timing</button>
+        <button onClick={()=>setTab("audio")} className={classNames("px-3 py-2 rounded", tab==="audio"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Audio / TTS</button>
+        <button onClick={()=>setTab("import")} className={classNames("px-3 py-2 rounded", tab==="import"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Import CSV</button>
+        <button onClick={()=>setTab("manage")} className={classNames("px-3 py-2 rounded", tab==="manage"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Manage Words</button>
+      </div>
+
+      {tab === "general" && <GeneralSettings store={store} setStore={setStore} />}
+      {tab === "day1" && <Day12Settings store={store} setStore={setStore} />}
+      {tab === "timing" && <TimingSettings store={store} setStore={setStore} />}
+      {tab === "audio" && <AudioSettings store={store} setStore={setStore} />}
+      {tab === "import" && <ContentManager store={store} setStore={setStore} />}
+      {tab === "manage" && <ManageWords store={store} setStore={setStore} />}
+    </Card>
+  );
+}
+
+/* =============== General =============== */
+function GeneralSettings({ store, setStore }) {
+  const [goal, setGoal] = useState(store.goal);
+  const [easyInt, setEasyInt] = useState(store.intervals?.easy ?? 3);
+  const [goodInt, setGoodInt] = useState(store.intervals?.good ?? 2);
+  const [hardInt, setHardInt] = useState(store.intervals?.hard ?? 1);
+  const [dailyNew, setDailyNew] = useState(store.dailyNew ?? 10);
+
+  function saveSettings() {
+    setStore((s) => ({ ...s, goal: Number(goal), intervals: { easy: Number(easyInt), good: Number(goodInt), hard: Number(hardInt) }, dailyNew: Number(dailyNew) }));
+  }
+
+  return (
+    <>
+      <label className="block text-sm mb-1">Daily XP goal</label>
+      <input
+        type="number" min={10} step={5} value={goal}
+        onChange={(e) => setGoal(e.target.value)}
+        className="mb-4 w-full rounded p-2 bg-white text-black placeholder-slate-500"
+      />
+
+      <div className="mb-4">
+        <div className="text-sm mb-1">Base review intervals (days)</div>
+        <div className="flex flex-wrap gap-3 mb-2">
+          <label className="flex items-center gap-2">Easy:
+            <input type="number" min={1} value={easyInt} onChange={(e) => setEasyInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
+          </label>
+          <label className="flex items-center gap-2">Good:
+            <input type="number" min={1} value={goodInt} onChange={(e) => setGoodInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
+          </label>
+          <label className="flex items-center gap-2">Hard:
+            <input type="number" min={1} value={hardInt} onChange={(e) => setHardInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
+          </label>
+        </div>
+        <div className="text-xs text-slate-300">Affects SM-2 after Day-2. EF adapts spacing over time.</div>
+      </div>
+
+      <div className="mb-4">
+        <div className="text-sm mb-1">Daily new words</div>
+        <input
+          type="number" min={0} value={dailyNew}
+          onChange={(e) => setDailyNew(e.target.value)}
+          className="w-32 rounded p-2 bg-white text-black"
+        />
+        <div className="text-xs text-slate-300 mt-1">Each day up to this many unintroduced words will enter the review queue.</div>
+      </div>
+
+      <div className="flex gap-2 mt-2">
+        <button onClick={saveSettings} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save</button>
+      </div>
+    </>
+  );
+}
+
+/* =============== Day-1 & Day-2 =============== */
+function Day12Settings({ store, setStore }) {
+  const [d1Again, setD1Again] = useState(store.day1?.againMins ?? 5);
+  const [d1Hard, setD1Hard] = useState(store.day1?.hardMins ?? 10);
+  const [d1Good, setD1Good] = useState(store.day1?.goodDays ?? 1);
+  const [d1Easy, setD1Easy] = useState(store.day1?.easyDays ?? 2);
+
+  const [d2Again, setD2Again] = useState(store.day2?.againMins ?? 5);
+  const [d2Hard, setD2Hard] = useState(store.day2?.hardMins ?? 15); // default 15m per your spec
+  const [d2Good, setD2Good] = useState(store.day2?.goodDays ?? 1);
+  const [d2Easy, setD2Easy] = useState(store.day2?.easyDays ?? 2);
+
+  function save() {
+    setStore((s) => ({
+      ...s,
+      day1: { againMins: Number(d1Again), hardMins: Number(d1Hard), goodDays: Number(d1Good), easyDays: Number(d1Easy) },
+      day2: { againMins: Number(d2Again), hardMins: Number(d2Hard), goodDays: Number(d2Good), easyDays: Number(d2Easy) },
+    }));
+  }
+
+  return (
+    <>
+      <div className="text-sm mb-2">Day-1 timings</div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label className="flex items-center gap-2">Again (minutes)
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d1Again} onChange={(e)=>setD1Again(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-2">Hard (minutes)
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d1Hard} onChange={(e)=>setD1Hard(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-2">Good (days)
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d1Good} onChange={(e)=>setD1Good(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-2">Easy (days)
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d1Easy} onChange={(e)=>setD1Easy(e.target.value)} />
+        </label>
+      </div>
+
+      <div className="text-sm mt-5 mb-2">Day-2 timings</div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label className="flex items-center gap-2">Again (minutes)
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d2Again} onChange={(e)=>setD2Again(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-2">Hard (minutes)
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d2Hard} onChange={(e)=>setD2Hard(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-2">Good (days)
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d2Good} onChange={(e)=>setD2Good(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-2">Easy (days)
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d2Easy} onChange={(e)=>setD2Easy(e.target.value)} />
+        </label>
+      </div>
+
+      <div className="mt-3">
+        <button onClick={save} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save Day-1/2 timings</button>
+      </div>
+    </>
+  );
+}
+
+/* =============== Timing thresholds (Day-3+) =============== */
+function TimingSettings({ store, setStore }) {
+  const [fastMs, setFastMs] = useState(store.timing?.fastMs ?? 5000);
+  const [slowMs, setSlowMs] = useState(store.timing?.slowMs ?? 25000);
+  const [clampMin, setClampMin] = useState(store.timing?.clampMin ?? 0.75);
+  const [clampMax, setClampMax] = useState(store.timing?.clampMax ?? 1.25);
+
+  function save() {
+    setStore((s) => ({
+      ...s,
+      timing: {
+        fastMs: Math.max(0, Number(fastMs)),
+        slowMs: Math.max(1, Number(slowMs)),
+        clampMin: Number(clampMin),
+        clampMax: Number(clampMax),
+      }
+    }));
+  }
+
+  return (
+    <>
+      <div className="text-sm mb-2">Timing → affects Day-3+ Hard/Good/Easy via a factor:</div>
+      <ul className="text-sm text-slate-300 list-disc pl-5 mb-3">
+        <li>≤ <b>fastMs</b> → max boost (<b>clampMax</b>)</li>
+        <li>≥ <b>slowMs</b> → max shrink (<b>clampMin</b>)</li>
+        <li>Linear blend between</li>
+      </ul>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label className="flex items-center gap-2">fastMs
+          <input type="number" min={0} className="w-28 rounded p-2 bg-white text-black" value={fastMs} onChange={(e)=>setFastMs(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-2">slowMs
+          <input type="number" min={1} className="w-28 rounded p-2 bg-white text-black" value={slowMs} onChange={(e)=>setSlowMs(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-2">clampMin
+          <input type="number" step="0.01" className="w-28 rounded p-2 bg-white text-black" value={clampMin} onChange={(e)=>setClampMin(e.target.value)} />
+        </label>
+        <label className="flex items-center gap-2">clampMax
+          <input type="number" step="0.01" className="w-28 rounded p-2 bg-white text-black" value={clampMax} onChange={(e)=>setClampMax(e.target.value)} />
+        </label>
+      </div>
+
+      <div className="text-xs text-slate-400 mt-2">Typical: fast=5000, slow=25000, clampMin=0.75, clampMax=1.25</div>
+
+      <div className="mt-3">
+        <button onClick={save} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save timing</button>
+      </div>
+    </>
+  );
+}
+
+/* =============== Import CSV =============== */
+// (Kept simple—same behavior as before; headers: en, th, pos, example, sym)
 function parseCSV(text) {
   const t = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const rows = [];
@@ -23,10 +216,8 @@ function parseCSV(text) {
   while (i < t.length) {
     const c = t[i];
     if (inQuotes) {
-      if (c === '"') {
-        if (t[i + 1] === '"') { field += '"'; i++; }
-        else { inQuotes = false; }
-      } else field += c;
+      if (c === '"') { if (t[i + 1] === '"') { field += '"'; i++; } else { inQuotes = false; } }
+      else field += c;
     } else {
       if (c === '"') inQuotes = true;
       else if (c === ",") { row.push(field); field = ""; }
@@ -37,10 +228,8 @@ function parseCSV(text) {
   }
   if (field.length || row.length) { row.push(field); rows.push(row); }
   if (!rows.length) return [];
-
   const header = rows[0].map(h => h.trim().toLowerCase());
   const findIdx = (names) => names.map(n => header.indexOf(n)).find(x => x !== -1);
-
   const idx = {
     en: findIdx(["en"]),
     th: findIdx(["th"]),
@@ -49,7 +238,6 @@ function parseCSV(text) {
     syn: findIdx(["sym","syn","syn.","synonym","synonyms"]),
   };
   if (idx.en === -1 || idx.th === -1) return [];
-
   const expectedLen = header.length;
   const out = [];
   for (let r = 1; r < rows.length; r++) {
@@ -70,323 +258,6 @@ function parseCSV(text) {
   return out;
 }
 
-/* ===========================
-   Settings root
-=========================== */
-export default function Settings({ store, setStore }) {
-  const [tab, setTab] = useState("general"); // general | day1 | day2 | audio | import | manage | timing
-  return (
-    <Card>
-      <div className="text-lg font-bold mb-4">Settings</div>
-      <div className="flex gap-2 mb-4 flex-wrap">
-        <button onClick={()=>setTab("general")} className={classNames("px-3 py-2 rounded", tab==="general"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>General</button>
-        <button onClick={()=>setTab("day1")} className={classNames("px-3 py-2 rounded", tab==="day1"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Day-1 timings</button>
-        <button onClick={()=>setTab("day2")} className={classNames("px-3 py-2 rounded", tab==="day2"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Day-2 timings</button>
-        <button onClick={()=>setTab("timing")} className={classNames("px-3 py-2 rounded", tab==="timing"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Timing (Day-3+)</button>
-        <button onClick={()=>setTab("audio")} className={classNames("px-3 py-2 rounded", tab==="audio"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Audio / TTS</button>
-        <button onClick={()=>setTab("import")} className={classNames("px-3 py-2 rounded", tab==="import"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Import CSV</button>
-        <button onClick={()=>setTab("manage")} className={classNames("px-3 py-2 rounded", tab==="manage"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Manage Words</button>
-      </div>
-
-      {tab === "general" && <GeneralSettings store={store} setStore={setStore} />}
-      {tab === "day1" && <Day1Settings store={store} setStore={setStore} />}
-      {tab === "day2" && <Day2Settings store={store} setStore={setStore} />}
-      {tab === "timing" && <TimingSettings store={store} setStore={setStore} />}
-      {tab === "audio" && <AudioSettings store={store} setStore={setStore} />}
-      {tab === "import" && <ContentManager store={store} setStore={setStore} />}
-      {tab === "manage" && <ManageWords store={store} setStore={setStore} />}
-    </Card>
-  );
-}
-
-function GeneralSettings({ store, setStore }) {
-  const [goal, setGoal] = useState(store.goal);
-  const [easyInt, setEasyInt] = useState(store.intervals?.easy ?? 3);
-  const [goodInt, setGoodInt] = useState(store.intervals?.good ?? 2);
-  const [hardInt, setHardInt] = useState(store.intervals?.hard ?? 1);
-  const [dailyNew, setDailyNew] = useState(store.dailyNew ?? 10);
-
-  function saveSettings() {
-    setStore((s) => ({ ...s, goal: Number(goal), intervals: { easy: Number(easyInt), good: Number(goodInt), hard: Number(hardInt) }, dailyNew: Number(dailyNew) }));
-  }
-
-  function rescheduleAll() {
-    const cards = { ...store.cards };
-    Object.keys(cards).forEach((id) => {
-      const c = cards[id];
-      if (!c.introduced) return;
-      // Recompute with "good" as baseline
-      const interval = Math.max(1, Number(goodInt || 2));
-      const dueAt = nowMs() + interval * 86_400_000;
-      cards[id] = { ...c, due: toKeyDate(new Date(dueAt)), dueAt, interval, reps: Math.max(c.reps || 0, 1) };
-    });
-    setStore((s) => ({ ...s, cards }));
-  }
-
-  return (
-    <>
-      <label className="block text-sm mb-1">Daily XP goal</label>
-      <input
-        type="number" min={10} step={5} value={goal}
-        onChange={(e) => setGoal(e.target.value)}
-        className="mb-4 w-full rounded p-2 bg-white text-black placeholder-slate-500"
-      />
-
-      <div className="mb-4">
-        <div className="text-sm mb-1">Base review intervals (days) for Day-3+</div>
-        <div className="flex flex-wrap gap-3 mb-2">
-          <label className="flex items-center gap-2">Easy:
-            <input type="number" min={1} value={easyInt} onChange={(e) => setEasyInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
-          </label>
-          <label className="flex items-center gap-2">Good:
-            <input type="number" min={1} value={goodInt} onChange={(e) => setGoodInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
-          </label>
-          <label className="flex items-center gap-2">Hard:
-            <input type="number" min={1} value={hardInt} onChange={(e) => setHardInt(e.target.value)} className="w-20 rounded p-1 bg-white text-black" />
-          </label>
-        </div>
-        <div className="text-xs text-slate-300">These are the SM-2 base intervals for Day-3+. EF and timing factor adapt spacing over time.</div>
-      </div>
-
-      <div className="mb-4">
-        <div className="text-sm mb-1">Daily new words</div>
-        <input
-          type="number" min={0} value={dailyNew}
-          onChange={(e) => setDailyNew(e.target.value)}
-          className="w-32 rounded p-2 bg-white text-black"
-        />
-        <div className="text-xs text-slate-300 mt-1">Each day up to this many unintroduced words will enter the review queue.</div>
-      </div>
-
-      <div className="flex gap-2 mt-2">
-        <button onClick={saveSettings} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save</button>
-        <button onClick={rescheduleAll} className="rounded bg-white/10 border border-white/20 px-4 py-2 hover:bg-white/20">Recompute schedules</button>
-      </div>
-    </>
-  );
-}
-
-function Day1Settings({ store, setStore }) {
-  const [againMins, setAgainMins] = useState(store.day1?.againMins ?? 5);
-  const [hardMins, setHardMins] = useState(store.day1?.hardMins ?? 10);
-  const [goodDays, setGoodDays] = useState(store.day1?.goodDays ?? 1);
-  const [easyDays, setEasyDays] = useState(store.day1?.easyDays ?? 2);
-
-  function save() {
-    setStore((s) => ({ ...s, day1: {
-      againMins: Number(againMins),
-      hardMins: Number(hardMins),
-      goodDays: Number(goodDays),
-      easyDays: Number(easyDays),
-    }}));
-  }
-
-  return (
-    <>
-      <div className="text-sm mb-2">Day-1 timings (when you first learn a word)</div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <label className="flex items-center gap-2">Again (minutes)
-          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={againMins} onChange={(e)=>setAgainMins(e.target.value)} />
-        </label>
-        <label className="flex items-center gap-2">Hard (minutes)
-          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={hardMins} onChange={(e)=>setHardMins(e.target.value)} />
-        </label>
-        <label className="flex items-center gap-2">Good (days)
-          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={goodDays} onChange={(e)=>setGoodDays(e.target.value)} />
-        </label>
-        <label className="flex items-center gap-2">Easy (days)
-          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={easyDays} onChange={(e)=>setEasyDays(e.target.value)} />
-        </label>
-      </div>
-      <div className="text-xs text-slate-300 mt-2">After Day-1, Day-2 uses (5m / 15m / 1d / 2d). Day-3+ is performance-based (SM-2 + timing).</div>
-      <div className="mt-3">
-        <button onClick={save} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save Day-1 timings</button>
-      </div>
-    </>
-  );
-}
-
-function Day2Settings({ store, setStore }) {
-  const [againMins, setAgainMins] = useState(store.secondReview?.againMins ?? 5);
-  const [hardMins, setHardMins] = useState(store.secondReview?.hardMins ?? 15);
-  const [goodDays, setGoodDays] = useState(store.secondReview?.goodDays ?? 1);
-  const [easyDays, setEasyDays] = useState(store.secondReview?.easyDays ?? 2);
-
-  function save() {
-    setStore((s) => ({ ...s, secondReview: {
-      againMins: Number(againMins),
-      hardMins: Number(hardMins),
-      goodDays: Number(goodDays),
-      easyDays: Number(easyDays),
-    }}));
-  }
-
-  return (
-    <>
-      <div className="text-sm mb-2">Day-2 timings (your requested change: Hard = <b>15m</b>)</div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <label className="flex items-center gap-2">Again (minutes)
-          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={againMins} onChange={(e)=>setAgainMins(e.target.value)} />
-        </label>
-        <label className="flex items-center gap-2">Hard (minutes)
-          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={hardMins} onChange={(e)=>setHardMins(e.target.value)} />
-        </label>
-        <label className="flex items-center gap-2">Good (days)
-          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={goodDays} onChange={(e)=>setGoodDays(e.target.value)} />
-        </label>
-        <label className="flex items-center gap-2">Easy (days)
-          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={easyDays} onChange={(e)=>setEasyDays(e.target.value)} />
-        </label>
-      </div>
-      <div className="text-xs text-slate-300 mt-2">If you press <b>Again</b> on Day-3+, the card will temporarily follow Day-2 rules again for the rest of today.</div>
-      <div className="mt-3">
-        <button onClick={save} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save Day-2 timings</button>
-      </div>
-    </>
-  );
-}
-
-function TimingSettings({ store, setStore }) {
-  const [fastMs, setFastMs] = useState(store.timing?.fastMs ?? 5000);
-  const [slowMs, setSlowMs] = useState(store.timing?.slowMs ?? 25000);
-  const [clampMin, setClampMin] = useState(store.timing?.clampMin ?? 0.75);
-  const [clampMax, setClampMax] = useState(store.timing?.clampMax ?? 1.25);
-
-  function save() {
-    setStore((s) => ({ ...s, timing: {
-      fastMs: Number(fastMs),
-      slowMs: Number(slowMs),
-      clampMin: Number(clampMin),
-      clampMax: Number(clampMax),
-    }}));
-  }
-
-  return (
-    <>
-      <div className="text-sm mb-2">Hidden timing tuner for Day-3+ (affects spacing via your answer speed)</div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        <label className="flex items-center gap-2">Fast (ms)
-          <input type="number" min={1000} step={100} className="w-28 rounded p-2 bg-white text-black" value={fastMs} onChange={(e)=>setFastMs(e.target.value)} />
-        </label>
-        <label className="flex items-center gap-2">Slow (ms)
-          <input type="number" min={2000} step={100} className="w-28 rounded p-2 bg-white text-black" value={slowMs} onChange={(e)=>setSlowMs(e.target.value)} />
-        </label>
-        <label className="flex items-center gap-2">Clamp min
-          <input type="number" step={0.01} min={0.25} max={1.5} className="w-28 rounded p-2 bg-white text-black" value={clampMin} onChange={(e)=>setClampMin(e.target.value)} />
-        </label>
-        <label className="flex items-center gap-2">Clamp max
-          <input type="number" step={0.01} min={0.25} max={2} className="w-28 rounded p-2 bg-white text-black" value={clampMax} onChange={(e)=>setClampMax(e.target.value)} />
-        </label>
-      </div>
-      <div className="text-xs text-slate-300 mt-2">
-        ≤ Fast → larger intervals (up to max); ≥ Slow → smaller intervals (down to min). Interpolated in-between.
-      </div>
-      <div className="mt-3">
-        <button onClick={save} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save timing</button>
-      </div>
-    </>
-  );
-}
-
-/* ===========================
-   Audio Settings
-=========================== */
-function AudioSettings({ store, setStore }) {
-  const [voices, setVoices] = useState([]);
-  const [enVoice, setEnVoice] = useState(store.tts?.enVoice ?? "");
-  const [thVoice, setThVoice] = useState(store.tts?.thVoice ?? "");
-  const [rate, setRate] = useState(store.tts?.rate ?? 0.92);
-  const [pitch, setPitch] = useState(store.tts?.pitch ?? 1.0);
-  const [volume, setVolume] = useState(store.tts?.volume ?? 1.0);
-
-  useEffect(() => {
-    const synth = window.speechSynthesis;
-    if (!synth) return;
-    const populate = () => setVoices(synth.getVoices?.() || []);
-    populate();
-    try {
-      synth.addEventListener("voiceschanged", populate);
-      return () => synth.removeEventListener("voiceschanged", populate);
-    } catch {}
-  }, []);
-
-  const enList = voices.filter(v => (v.lang || "").toLowerCase().startsWith("en"));
-  const thList = voices.filter(v => (v.lang || "").toLowerCase().startsWith("th"));
-
-  function pickBestVoice(voices, lang, preferredName) {
-    const list = voices.filter(v => (v.lang || "").toLowerCase().startsWith(lang.toLowerCase()));
-    if (!list.length) return null;
-    if (preferredName) {
-      const exact = list.find(v => (v.name || "") === preferredName);
-      if (exact) return exact;
-      const part = list.find(v => (v.name || "").toLowerCase().includes(preferredName.toLowerCase()));
-      if (part) return part;
-    }
-    const byName = (s) => list.find(x => (x.name || "").toLowerCase().includes(s));
-    return byName("google") || byName("microsoft") || list[0] || null;
-  }
-  function ttsSpeak(text, lang, tts) {
-    try {
-      const synth = window.speechSynthesis;
-      if (!synth) return;
-      const u = new SpeechSynthesisUtterance(String(text));
-      u.lang = lang;
-      const prefName = lang.startsWith("th") ? tts?.thVoice : tts?.enVoice;
-      const best = pickBestVoice(voices, lang, prefName);
-      if (best) u.voice = best;
-      u.rate = Number(tts?.rate ?? 0.92);
-      u.pitch = Number(tts?.pitch ?? 1.0);
-      u.volume = Number(tts?.volume ?? 1.0);
-      synth.cancel(); synth.speak(u);
-    } catch {}
-  }
-
-  function save() {
-    setStore((s) => ({ ...s, tts: { ...s.tts, enVoice, thVoice, rate: Number(rate), pitch: Number(pitch), volume: Number(volume) } }));
-  }
-
-  return (
-    <>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <label className="flex items-center gap-2">EN voice
-          <select value={enVoice} onChange={(e)=>setEnVoice(e.target.value)} className="flex-1 rounded p-2 bg-white text-black">
-            <option value="">Auto-pick best</option>
-            {enList.map(v => <option key={v.name} value={v.name}>{v.name}</option>)}
-          </select>
-        </label>
-        <label className="flex items-center gap-2">TH voice
-          <select value={thVoice} onChange={(e)=>setThVoice(e.target.value)} className="flex-1 rounded p-2 bg-white text-black">
-            <option value="">Auto-pick best</option>
-            {thList.map(v => <option key={v.name} value={v.name}>{v.name}</option>)}
-          </select>
-        </label>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
-        <label className="flex items-center gap-2">Rate
-          <input type="number" step="0.01" min="0.5" max="1.5" value={rate} onChange={(e)=>setRate(e.target.value)} className="w-24 rounded p-2 bg-white text-black" />
-        </label>
-        <label className="flex items-center gap-2">Pitch
-          <input type="number" step="0.01" min="0.5" max="1.5" value={pitch} onChange={(e)=>setPitch(e.target.value)} className="w-24 rounded p-2 bg-white text-black" />
-        </label>
-        <label className="flex items-center gap-2">Volume
-          <input type="number" step="0.1" min="0" max="1" value={volume} onChange={(e)=>setVolume(e.target.value)} className="w-24 rounded p-2 bg-white text-black" />
-        </label>
-      </div>
-
-      <div className="flex gap-2 mt-3">
-        <button onClick={() => ttsSpeak("This is the English preview.", "en-US", { enVoice, rate, pitch, volume })} className="rounded bg-white/10 px-3 py-2 hover:bg-white/20">Preview EN</button>
-        <button onClick={() => ttsSpeak("นี่คือเสียงตัวอย่างภาษาไทย", "th-TH", { thVoice, rate, pitch, volume })} className="rounded bg-white/10 px-3 py-2 hover:bg-white/20">Preview TH</button>
-        <button onClick={save} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600 ml-auto">Save audio settings</button>
-      </div>
-      <div className="text-xs text-slate-400 mt-2">Tip: Chrome often has “Google” voices; Edge has “Microsoft … Online (Natural)”.</div>
-    </>
-  );
-}
-
-/* ===========================
-   CSV Import (with duplicate decision)
-=========================== */
 function ContentManager({ store, setStore }) {
   const fileRef = useRef(null);
   const [error, setError] = useState("");
@@ -402,24 +273,18 @@ function ContentManager({ store, setStore }) {
         const text = String(reader.result || "");
         const rows = parseCSV(text);
         if (!rows.length) { setError("CSV must include headers: en, th, pos, example, sym"); return; }
-
         const existingMap = new Map(store.deck.map(d => [d.en.toLowerCase(), d]));
         const duplicates = [];
         const newOnes = [];
-
         for (const r of rows) {
           const key = r.en.toLowerCase();
           if (existingMap.has(key)) duplicates.push(r);
           else newOnes.push(r);
         }
-
         let replaceDup = false;
         if (duplicates.length) {
-          replaceDup = window.confirm(
-            `${duplicates.length} word(s) already exist. Click OK to REPLACE them with CSV data, or Cancel to SKIP duplicates.`
-          );
+          replaceDup = window.confirm(`${duplicates.length} word(s) already exist. OK = REPLACE, Cancel = SKIP duplicates.`);
         }
-
         const nextDeck = [...store.deck];
         const nextCards = { ...store.cards };
 
@@ -431,20 +296,17 @@ function ContentManager({ store, setStore }) {
             }
           }
         }
-
         let nextId = (last(nextDeck)?.id || 0) + 1;
         for (const r of newOnes) {
           const newCard = { id: nextId++, en: r.en, th: r.th, pos: r.pos, example: r.example, syn: r.syn || "" };
           nextDeck.push(newCard);
           nextCards[newCard.id] = {
-            ef: 2.5, interval: 0, due: todayKey(), dueAt: nowMs(),
-            correct: 0, wrong: 0, reps: 0, reviews: 0,
-            introduced: false, introducedOn: null,
-            stageOverride: null, stageOverrideUntil: null,
+            ef: 2.5, interval: 0, due: todayKey(), dueAt: Date.now(),
+            correct: 0, wrong: 0, reps: 0, reviews: 0, introduced: false, introducedOn: null,
             lastLatencyMs: null, avgLatencyMs: null, latencyCount: 0, latencyHistory: [],
+            penaltyDateKey: null, penaltyLevelToday: 0,
           };
         }
-
         setStore((s) => ({ ...s, deck: nextDeck, cards: nextCards }));
         setInfo(`Imported: ${newOnes.length} new, ${duplicates.length ? (replaceDup ? "replaced" : "skipped") : "0 duplicates"}.`);
         e.target.value = "";
@@ -472,9 +334,7 @@ function ContentManager({ store, setStore }) {
   );
 }
 
-/* ===========================
-   Manage Words (bulk select + delete)
-=========================== */
+/* =============== Manage Words (kept) =============== */
 function ManageWords({ store, setStore }) {
   const [en, setEn] = useState("");
   const [th, setTh] = useState("");
@@ -485,8 +345,6 @@ function ManageWords({ store, setStore }) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(() => new Set());
 
-  function clearForm() { setEn(""); setTh(""); setExample(""); setPos("noun"); setSyn(""); setEditingId(null); }
-
   function addWord() {
     if (!en.trim() || !th.trim()) return alert("Please enter EN and TH.");
     const nextId = (store.deck[store.deck.length - 1]?.id || 0) + 1;
@@ -495,15 +353,17 @@ function ManageWords({ store, setStore }) {
     setStore((s) => ({
       ...s,
       deck: newDeck,
-      cards: { ...s.cards, [nextId]: {
-        ef: 2.5, interval: 0, due: todayKey(), dueAt: nowMs(),
-        correct: 0, wrong: 0, reps: 0, reviews: 0,
-        introduced: false, introducedOn: null,
-        stageOverride: null, stageOverrideUntil: null,
-        lastLatencyMs: null, avgLatencyMs: null, latencyCount: 0, latencyHistory: [],
-      } }
+      cards: {
+        ...s.cards,
+        [nextId]: {
+          ef: 2.5, interval: 0, due: todayKey(), dueAt: Date.now(),
+          correct: 0, wrong: 0, reps: 0, reviews: 0, introduced: false, introducedOn: null,
+          lastLatencyMs: null, avgLatencyMs: null, latencyCount: 0, latencyHistory: [],
+          penaltyDateKey: null, penaltyLevelToday: 0,
+        }
+      }
     }));
-    clearForm();
+    setEn(""); setTh(""); setExample(""); setPos("noun"); setSyn("");
   }
 
   function startEdit(card) {
@@ -515,7 +375,7 @@ function ManageWords({ store, setStore }) {
     if (!editingId) return;
     const newDeck = store.deck.map((c) => c.id === editingId ? { ...c, en, th, example, pos, syn } : c);
     setStore((s) => ({ ...s, deck: newDeck }));
-    clearForm();
+    setEditingId(null); setEn(""); setTh(""); setExample(""); setPos("noun"); setSyn("");
   }
 
   function deleteWord(id) {
@@ -524,22 +384,8 @@ function ManageWords({ store, setStore }) {
     const newCards = { ...store.cards };
     delete newCards[id];
     setStore((s) => ({ ...s, deck: newDeck, cards: newCards }));
-    if (editingId === id) clearForm();
+    if (editingId === id) { setEditingId(null); setEn(""); setTh(""); setExample(""); setPos("noun"); setSyn(""); }
     setSelected((prev) => { const n = new Set(prev); n.delete(id); return n; });
-  }
-
-  function deleteSelected() {
-    if (!selected.size) return;
-    const ids = Array.from(selected);
-    const preview = ids.slice(0, 5).map(id => store.deck.find(d => d.id === id)?.en || id).join(", ");
-    if (!confirm(`Delete ${ids.length} selected word(s)?\n${preview}${ids.length > 5 ? ", ..." : ""}`)) return;
-    const idSet = new Set(ids);
-    const newDeck = store.deck.filter(c => !idSet.has(c.id));
-    const newCards = { ...store.cards };
-    ids.forEach(id => delete newCards[id]);
-    setStore((s) => ({ ...s, deck: newDeck, cards: newCards }));
-    if (editingId && idSet.has(editingId)) clearForm();
-    setSelected(new Set());
   }
 
   const filtered = useMemo(() => {
@@ -583,7 +429,7 @@ function ManageWords({ store, setStore }) {
           Select all (visible)
         </label>
         {selected.size > 0 && (
-          <button onClick={deleteSelected} className="px-3 py-2 bg-red-500 rounded hover:bg-red-600 text-sm">
+          <button onClick={()=>{ const ids = Array.from(selected); ids.forEach(deleteWord); setSelected(new Set()); }} className="px-3 py-2 bg-red-500 rounded hover:bg-red-600 text-sm">
             Delete selected ({selected.size})
           </button>
         )}
@@ -600,14 +446,14 @@ function ManageWords({ store, setStore }) {
           <option value="adverb">adverb</option>
           <option value="noun/verb">noun/verb</option>
         </select>
-        <input className="w-full p-2 bg-white text-black rounded placeholder-slate-500 md:col-span-2" placeholder="Synonyms (comma-separated) — e.g., fast,quick,rapid" value={syn} onChange={(e) => setSyn(e.target.value)} />
+        <input className="w-full p-2 bg-white text-black rounded placeholder-slate-500 md:col-span-2" placeholder="Synonyms (comma-separated)" value={syn} onChange={(e) => setSyn(e.target.value)} />
       </div>
 
       <div className="flex gap-2 mb-6">
         {editingId ? (
           <>
             <button onClick={updateWord} className="px-4 py-2 bg-blue-500 rounded hover:bg-blue-600">Update</button>
-            <button onClick={clearForm} className="px-4 py-2 bg-gray-500 rounded hover:bg-gray-600">Cancel</button>
+            <button onClick={()=>{ setEditingId(null); setEn(""); setTh(""); setExample(""); setPos("noun"); setSyn(""); }} className="px-4 py-2 bg-gray-500 rounded hover:bg-gray-600">Cancel</button>
           </>
         ) : (
           <button onClick={addWord} className="px-4 py-2 bg-green-500 rounded hover:bg-green-600">Add</button>
@@ -626,14 +472,10 @@ function ManageWords({ store, setStore }) {
                 <span className="text-sm flex-1">
                   <b>{item.en}</b> — {item.th} <i className="text-slate-300">({item.pos})</i>
                   {item.example ? <span className="text-slate-300"> · “{item.example}”</span> : null}
-                  {item.syn ? (
-                    <span className="block text-xs text-emerald-300 mt-1">
-                      Syn: {item.syn.split(",").map(s=>s.trim()).filter(Boolean).join(", ")}
-                    </span>
-                  ) : null}
+                  {item.syn ? <span className="block text-xs text-emerald-300 mt-1">Syn: {item.syn}</span> : null}
                 </span>
                 <div className="flex gap-2 shrink-0">
-                  <button onClick={() => startEdit(item)} className="px-2 py-1 bg-yellow-500 rounded hover:bg-yellow-600 text-sm">Edit</button>
+                  <button onClick={() => { setEditingId(item.id); setEn(item.en); setTh(item.th); setExample(item.example || ""); setPos(item.pos || "noun"); setSyn(item.syn || ""); }} className="px-2 py-1 bg-yellow-500 rounded hover:bg-yellow-600 text-sm">Edit</button>
                   <button onClick={() => deleteWord(item.id)} className="px-2 py-1 bg-red-500 rounded hover:bg-red-600 text-sm">Delete</button>
                 </div>
               </li>
