@@ -3,12 +3,12 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   BookOpen, Brain, CalendarCheck2, CheckCircle2, Flame,
-  Headphones, Home, Moon, Sparkles, Star, Sun, Trophy,
-  Volume2, Mic, Square, Play
+  Headphones, Home, Moon, Sparkles, Star, Sun, Trophy, Volume2
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip } from "recharts";
 import Quiz from "./tabs/Quiz";
 import Settings from "./tabs/Settings";
+import ListeningLab from "./tabs/ListeningLab";
 
 /* ===========================
    Small helpers
@@ -24,7 +24,6 @@ const toKeyDate = (d = new Date()) => {
 const fromKeyDate = (k) => { const [y, m, d] = k.split("-").map(Number); return new Date(y, m - 1, d); };
 const todayKey = () => toKeyDate();
 const nowMs = () => Date.now();
-const endOfTodayMs = () => { const d = new Date(); d.setHours(23,59,59,999); return d.getTime(); };
 const MS = { min: 60_000, hour: 3_600_000, day: 86_400_000 };
 
 /* Durations like 5m / 2h / 3d */
@@ -130,9 +129,6 @@ function baseStageFor(prog) {
 
 /* ===========================
    Timing factor (Day-3+ only)
-   - fast (<= fastMs) => clampMax (e.g., 1.25)
-   - slow (>= slowMs) => clampMin (e.g., 0.75)
-   - linear blend in between
 =========================== */
 function computeTimingFactor(latencyMs, timing) {
   const fast = Math.max(0, Number(timing?.fastMs ?? 5000));
@@ -142,26 +138,19 @@ function computeTimingFactor(latencyMs, timing) {
   if (!Number.isFinite(latencyMs)) return 1.0;
   if (latencyMs <= fast) return clampMax;
   if (latencyMs >= slow) return clampMin;
-  const t = (latencyMs - fast) / (slow - fast); // 0..1
+  const t = (latencyMs - fast) / (slow - fast);
   const mul = clampMax + (clampMin - clampMax) * t;
   return Math.max(clampMin, Math.min(clampMax, mul));
 }
 
 /* ===========================
-   Penalty multipliers for Day-3+ (after "Again" today)
+   Penalty multipliers for Day-3+ (cumulative)
 =========================== */
 function penaltyMultiplier(level, grade) {
   if (level <= 0) return 1;
-  if (level === 1) {
-    if (grade === "hard") return 0.40;
-    if (grade === "good") return 0.60;
-    if (grade === "easy") return 0.60;
-  }
-  // level >= 2
-  if (grade === "hard") return 0.25;
-  if (grade === "good") return 0.50;
-  if (grade === "easy") return 0.50;
-  return 1;
+  const first = grade === "hard" ? 0.40 : 0.60;
+  const subsequent = grade === "hard" ? 0.25 : 0.50;
+  return first * Math.pow(subsequent, level - 1);
 }
 
 /* ===========================
@@ -207,7 +196,6 @@ function computeNext(progress, grade, settings, latencyHintMs) {
       return { ef: dropEF(progress.ef, 0.15), interval: 0, reps: dropReps(progress.reps), reviews: progress.reviews, ...mkDue(mins * MS.min) };
     }
     if (grade === "hard") {
-      // Your change: 15m on Day-2
       const mins = Math.max(1, Number(day2?.hardMins ?? 15));
       return { ef: dropEF(progress.ef, 0.05), interval: 0, reps: Math.max(0, progress.reps || 0), reviews: progress.reviews, ...mkDue(mins * MS.min) };
     }
@@ -223,39 +211,34 @@ function computeNext(progress, grade, settings, latencyHintMs) {
 
   // DAY 3+ rules
   if (grade === "again") {
-    // fixed 15m
     return { ef: dropEF(progress.ef, 0.15), interval: 0, reps: dropReps(progress.reps), reviews: progress.reviews, ...mkDue(15 * MS.min) };
   }
 
-  // Hard/Good/Easy base by SM-2
   const quality = grade === "hard" ? 2 : grade === "good" ? 4 : 5;
-  const base = sm2Step(progress, quality, intervals); // base days (integer)
-  // timing factor (based on measured latency if provided; else fallback to lastLatency)
+  const base = sm2Step(progress, quality, intervals);
   const tf = computeTimingFactor(
     Number.isFinite(latencyHintMs) ? latencyHintMs : (progress.lastLatencyMs ?? (settings?.timing?.fastMs ?? 5000)),
     timing
   );
-  let days = Math.max(1, Math.round(base.interval * tf));
+  let days = Math.max(1, Math.floor(base.interval * tf));
 
-  // penalty multipliers if there were 'Again's earlier today on Day-3+
   const today = todayKey();
   const level = (progress.penaltyDateKey === today) ? (progress.penaltyLevelToday || 0) : 0;
   const pMul = penaltyMultiplier(level, grade);
-  days = Math.max(1, Math.round(days * pMul));
+  days = Math.max(1, Math.floor(days * pMul));
 
   return { ef: base.ef, interval: days, reps: base.reps, reviews: progress.reviews, ...mkDue(days * MS.day) };
 }
 
 /* Preview label for buttons */
 function previewLabel(progress, grade, settings) {
-  // Use lastLatencyMs as a hint for Day-3+ previews
   const simulated = computeNext(progress, grade, settings, progress.lastLatencyMs ?? (settings?.timing?.fastMs ?? 5000));
   const delta = Math.max(1, simulated.dueAt - nowMs());
   return humanizeMs(delta);
 }
 
 /* ===========================
-   TTS helper
+   TTS helper (cards): prefer Google voices if present
 =========================== */
 function pickBestVoice(voices, lang, preferredName) {
   const list = voices.filter(v => (v.lang || "").toLowerCase().startsWith(lang.toLowerCase()));
@@ -303,7 +286,7 @@ export default function App() {
     intervals: { easy: 3, good: 2, hard: 1 },
     dailyNew: 10,
     day1: { againMins: 5, hardMins: 10, goodDays: 1, easyDays: 2 },
-    day2: { againMins: 5, hardMins: 15, goodDays: 1, easyDays: 2 }, // your change
+    day2: { againMins: 5, hardMins: 15, goodDays: 1, easyDays: 2 },
     timing: { fastMs: 5000, slowMs: 25000, clampMin: 0.75, clampMax: 1.25 },
     tts: { enVoice: "", thVoice: "", rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false }
   });
@@ -343,7 +326,6 @@ export default function App() {
       });
       patched.cards = cards;
 
-      // ensure syn field on deck
       patched.deck = (patched.deck || []).map(d => ({ syn: "", ...d }));
       return patched;
     });
@@ -383,7 +365,7 @@ export default function App() {
             introduced: true,
             introducedOn: today,
             due: today,
-            dueAt: nowMs(), // ready now
+            dueAt: nowMs(),
             interval: 0,
             reps: 0,
             reviews: 0,
@@ -680,7 +662,7 @@ function Flashcards({ store, setStore, onXP }) {
       store.deck.filter((c) => {
         const p = store.cards[c.id] ?? {};
         if (!p.introduced) return false;
-        if (typeof p.dueAt === "number") return p.dueAt <= nowMs();
+        if (typeof p.dueAt === "number") return p.dueAt <= Date.now();
         return (p.due ?? todayKey()) <= todayKey();
       }),
     [store.deck, store.cards]
@@ -750,7 +732,7 @@ function Flashcards({ store, setStore, onXP }) {
       measuredLatencyRef.current = latency;
     }
 
-    // compute next schedule (uses latency only on Day-3+ H/G/E)
+    // compute next schedule
     const next = computeNext(prog, grade, {
       intervals: store.intervals,
       day1: store.day1,
@@ -772,23 +754,20 @@ function Flashcards({ store, setStore, onXP }) {
     const today = todayKey();
     if (stage === "day3plus") {
       if (grade === "again") {
-        // increment penalty level for today
         const sameDay = prog.penaltyDateKey === today;
         const level = sameDay ? Math.min(10, (prog.penaltyLevelToday || 0) + 1) : 1;
         updated.penaltyDateKey = today;
         updated.penaltyLevelToday = level;
       } else {
-        // reset penalties on non-Again
         updated.penaltyDateKey = today;
         updated.penaltyLevelToday = 0;
       }
     } else {
-      // Day-1 / Day-2: ignore penalties
       updated.penaltyDateKey = today;
       updated.penaltyLevelToday = 0;
     }
 
-    // attach latency stats (always store whatever we measured)
+    // attach latency stats
     if (Number.isFinite(latency)) {
       updated = updateLatencyStats(updated, latency);
     }
@@ -806,9 +785,9 @@ function Flashcards({ store, setStore, onXP }) {
   const lblGood  = previewLabel(prog, "good",  settingsPack);
   const lblEasy  = previewLabel(prog, "easy",  settingsPack);
 
-  // "Due in" display (for sidebar)
+  // "Due in" display
   const dueInText = (() => {
-    const delta = Math.max(0, (prog?.dueAt ?? nowMs()) - nowMs());
+    const delta = Math.max(0, (prog?.dueAt ?? Date.now()) - Date.now());
     const val = delta ? humanizeMs(delta) : "0m";
     return val;
   })();
@@ -819,7 +798,7 @@ function Flashcards({ store, setStore, onXP }) {
         <div className="rounded-3xl border border-white/10 bg-white/5 p-6 min-h-[60dvh] sm:min-h-[320px] flex flex-col">
           <div className="flex items-center justify-between text-sm text-slate-300">
             <span>Card {positionLabel}</span>
-            <span>Left in queue now: <b>{leftCount}</b></span>
+            <span>Left in queue now: <b>{Math.max(0, dueCards.length - 1)}</b></span>
           </div>
 
           <div className="mt-2 text-4xl font-extrabold tracking-tight break-words">{card.en}</div>
@@ -908,207 +887,6 @@ function ProgressSection({ store }) {
         <div className="text-slate-300 text-sm">(coming soon)</div>
       </Card>
     </section>
-  );
-}
-
-/* ===========================
-   Listening Lab (unchanged)
-=========================== */
-function ListeningLab({ store, onXP }) {
-  const [source, setSource] = useState("deck");
-  const firstId = store.deck[0]?.id ?? null;
-  const [selectedId, setSelectedId] = useState(firstId);
-  const [customText, setCustomText] = useState("");
-  const [recognized, setRecognized] = useState("");
-  const [scorePct, setScorePct] = useState(null);
-  const audioRef = useRef(null);
-
-  const [recording, setRecording] = useState(false);
-  const recorderRef = useRef(null);
-  const chunksRef = useRef([]);
-  const [audioURL, setAudioURL] = useState(null);
-
-  const Recognition =
-    typeof window !== "undefined"
-      ? window.SpeechRecognition || window.webkitSpeechRecognition
-      : null;
-  const supportsSTT = !!Recognition;
-
-  const expected = useMemo(() => {
-    if (source === "custom") return customText.trim();
-    const card = store.deck.find((d) => d.id === selectedId);
-    return card?.en ?? "";
-  }, [source, customText, store.deck, selectedId]);
-
-  function normalize(s) { return s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim(); }
-  function levenshtein(a, b) {
-    const m = a.length, n = b.length;
-    const dp = Array.from({ length: m + 1 }, () => Array(n + 1).fill(0));
-    for (let i = 0; i <= m; i++) dp[i][0] = i;
-    for (let j = 0; j <= n; j++) dp[0][j] = j;
-    for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
-    }
-    return dp[m][n];
-  }
-  function scoreInput(input) {
-    const A = normalize(expected);
-    const B = normalize(input || "");
-    if (!A || !B) { setScorePct(null); return; }
-    const dist = levenshtein(A, B);
-    const denom = Math.max(A.length, B.length) || 1;
-    const pct = Math.max(0, Math.round((1 - dist / denom) * 100));
-    setScorePct(pct);
-    if (pct >= 85) onXP(12); else onXP(5);
-  }
-
-  async function startRecording() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const rec = new MediaRecorder(stream);
-      recorderRef.current = rec;
-      chunksRef.current = [];
-      rec.ondataavailable = (e) => e.data && e.data.size && chunksRef.current.push(e.data);
-      rec.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
-        const url = URL.createObjectURL(blob);
-        setAudioURL(url);
-        stream.getTracks().forEach((t) => t.stop());
-      };
-      rec.start();
-      setRecording(true);
-    } catch {
-      alert("Microphone not available.");
-    }
-  }
-  function stopRecording() { try { recorderRef.current && recorderRef.current.stop(); } catch {} setRecording(false); }
-
-  function sttOnce() {
-    if (!supportsSTT) return;
-    const rec = new Recognition();
-    try { rec.lang = "en-US"; } catch {}
-    rec.interimResults = false;
-    try { rec.maxAlternatives = 1; } catch {}
-    rec.onresult = (ev) => {
-      const text = ev?.results?.[0]?.[0]?.transcript || "";
-      setRecognized(text);
-      scoreInput(text);
-    };
-    rec.onerror = () => {};
-    rec.start();
-  }
-
-  return (
-    <Card>
-      <div className="flex items-center justify-between mb-3">
-        <div className="font-semibold">Listening & Speaking Lab</div>
-        <div className="text-xs text-slate-400">TTS playback · mic recording · optional STT</div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2">
-          <div className="mb-2 text-sm">Source</div>
-          <div className="flex gap-2 mb-3">
-            <button
-              className={classNames("px-3 py-2 rounded", source==="deck"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}
-              onClick={()=>setSource("deck")}
-            >From deck</button>
-            <button
-              className={classNames("px-3 py-2 rounded", source==="custom"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}
-              onClick={()=>setSource("custom")}
-            >Custom</button>
-          </div>
-
-          {source === "deck" ? (
-            <div className="flex flex-col gap-2">
-              <label className="text-sm">Choose word</label>
-              <select
-                className="rounded p-2 bg-white text-black"
-                value={selectedId ?? ""}
-                onChange={(e)=>setSelectedId(Number(e.target.value))}
-              >
-                {store.deck.map((d)=>(<option key={d.id} value={d.id}>{d.en} — {d.th}</option>))}
-              </select>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-2">
-              <label className="text-sm">Custom English text</label>
-              <textarea
-                className="rounded p-2 bg-white text-black placeholder-slate-500"
-                rows={3}
-                placeholder="Type a sentence to practice"
-                value={customText}
-                onChange={(e)=>setCustomText(e.target.value)}
-              />
-            </div>
-          )}
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button onClick={()=> ttsSpeak(expected || "", "en-US", store.tts)} className="inline-flex items-center gap-2 rounded bg-white/10 px-3 py-2 hover:bg-white/20">
-              <Volume2 className="size-4" /> Play TTS
-            </button>
-
-            {!recording ? (
-              <button onClick={startRecording} className="inline-flex items-center gap-2 rounded bg-emerald-500/20 px-3 py-2 hover:bg-emerald-500/30">
-                <Mic className="size-4" /> Record
-              </button>
-            ) : (
-              <button onClick={stopRecording} className="inline-flex items-center gap-2 rounded bg-rose-500/20 px-3 py-2 hover:bg-rose-500/30">
-                <Square className="size-4" /> Stop
-              </button>
-            )}
-
-            <button
-              onClick={()=>{ if (audioRef.current && audioURL) { audioRef.current.currentTime = 0; audioRef.current.play(); } }}
-              disabled={!audioURL}
-              className={classNames("inline-flex items-center gap-2 rounded px-3 py-2", audioURL ? "bg-white/10 hover:bg-white/20" : "bg-white/5 cursor-not-allowed")}
-            >
-              <Play className="size-4" /> Playback
-            </button>
-
-            <button onClick={()=> sttOnce()} disabled={!supportsSTT} className={classNames("inline-flex items-center gap-2 rounded px-3 py-2", supportsSTT ? "bg-white/10 hover:bg-white/20" : "bg-white/5 cursor-not-allowed")}>
-              STT (English)
-            </button>
-          </div>
-
-          <audio ref={audioRef} src={audioURL ?? undefined} className="hidden" controls />
-
-          <div className="mt-4">
-            <div className="text-sm text-slate-400 mb-1">Recognized text (or type your attempt)</div>
-            <div className="flex gap-2">
-              <input
-                className="flex-1 rounded p-2 bg-white text-black placeholder-slate-500"
-                value={recognized}
-                onChange={(e)=>setRecognized(e.target.value)}
-                placeholder="If STT is unavailable, type what you heard"
-              />
-              <button onClick={()=> scoreInput(recognized)} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Check</button>
-            </div>
-            <div className="text-sm text-slate-300 mt-2">
-              Target: <i>{expected || "(empty)"}</i>
-            </div>
-            {scorePct !== null && (
-              <div className="mt-2 text-sm">
-                Similarity: <b>{scorePct}%</b> {scorePct >= 85 ? "✅ Great!" : "✨ Keep practicing"}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div>
-          <Card>
-            <div className="text-sm text-slate-400">Tips</div>
-            <ul className="mt-2 text-sm list-disc pl-5 space-y-1 text-slate-300">
-              <li>Click <b>Play TTS</b> to hear the sentence.</li>
-              <li>Use <b>Record</b> to capture your voice, then <b>Playback</b>.</li>
-              <li>If your browser supports it, use <b>STT</b> to transcribe what you say.</li>
-              <li>Hit <b>Check</b> to score your attempt and earn XP.</li>
-            </ul>
-          </Card>
-        </div>
-      </div>
-    </Card>
   );
 }
 

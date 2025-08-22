@@ -26,7 +26,7 @@ export default function ListeningLab({ store, onXP }) {
   // ----- Voices / TTS controls -----
   const [voices, setVoices] = useState([]);
   const [voiceKey, setVoiceKey] = useState(""); // string key
-  const [rate, setRate] = useState(0.9);   // a bit slower by default
+  const [rate, setRate] = useState(1.0);   // closer to Google Translate feel
   const [pitch, setPitch] = useState(1.0);
   const [volume, setVolume] = useState(1.0);
   const [mode, setMode] = useState("normal"); // normal | slow | clarity | words
@@ -76,23 +76,29 @@ export default function ListeningLab({ store, onXP }) {
     if (pct >= 85) onXP?.(12); else onXP?.(5);
   }
 
-  // ====== Voices: load & choose ======
+  // ====== Voices: load & choose (prefer Google voices) ======
   useEffect(() => {
     if (typeof window === "undefined" || !window.speechSynthesis) return;
 
+    const voiceToKey = (v) => `${v.name}__${v.lang}`;
     const pickDefault = (list) => {
-      // Prefer enhanced/US/UK voices when available
       const en = list.filter(v => /^en(-|_|$)/i.test(v.lang));
       const scoreVoice = (v) => {
         const name = (v.name || "").toLowerCase();
+        const lang = (v.lang || "").toLowerCase();
         let s = 0;
+        // Strongly prefer Chrome "Google ..." voices (closest to Google Translate)
+        if (name.includes("google")) s += 10;
+        // Then other popular high-quality voices
         if (name.includes("enhanced")) s += 3;
         if (name.includes("samantha") || name.includes("karen") || name.includes("daniel")) s += 2;
-        if (/en-us/i.test(v.lang)) s += 2;
-        if (/en-gb|en-au|en-in/i.test(v.lang)) s += 1;
+        // Locale preference
+        if (/en-us/.test(lang)) s += 3;
+        if (/en-gb|en-au|en-in/.test(lang)) s += 1;
         return s;
       };
-      const best = (en.length ? en : list).slice().sort((a,b)=>scoreVoice(b)-scoreVoice(a))[0];
+      const pool = en.length ? en : list;
+      const best = pool.slice().sort((a,b)=>scoreVoice(b)-scoreVoice(a))[0];
       return best || list[0];
     };
 
@@ -113,10 +119,8 @@ export default function ListeningLab({ store, onXP }) {
   }, []);
 
   const currentVoice = useMemo(() => {
-    return voices.find(v => voiceToKey(v) === voiceKey);
+    return voices.find(v => `${v.name}__${v.lang}` === voiceKey);
   }, [voices, voiceKey]);
-
-  function voiceToKey(v) { return `${v.name}__${v.lang}`; }
 
   // ====== TTS engine ======
   const stopSpeech = () => {
@@ -148,8 +152,8 @@ export default function ListeningLab({ store, onXP }) {
     stopSpeech();
     setSpeaking(true);
 
-    const v = currentVoice;
-    const base = { rate, pitch, volume, voice: v };
+    const base = { rate, pitch, volume, voice: currentVoice };
+    const clamp = (n, a, b) => Math.min(b, Math.max(a, n));
 
     try {
       for (let round = 0; round < repeat || 1; round++) {
@@ -175,8 +179,6 @@ export default function ListeningLab({ store, onXP }) {
       if (loop) { speakWithMode(); } // loop if toggled
     }
   }
-
-  const clamp = (n, a, b) => Math.min(b, Math.max(a, n));
 
   // ====== Recording ======
   async function startRecording() {
@@ -219,11 +221,13 @@ export default function ListeningLab({ store, onXP }) {
     rec.start();
   }
 
+  const voiceToKey = (v) => `${v.name}__${v.lang}`;
+
   return (
     <Card>
       <div className="flex items-center justify-between mb-3">
         <div className="font-semibold">Listening & Speaking Lab</div>
-        <div className="text-xs text-slate-400">Better voices · slower speed · clarity modes</div>
+        <div className="text-xs text-slate-400">Google-like voice · clarity modes · loop & repeat</div>
       </div>
 
       {/* Source */}
@@ -401,7 +405,7 @@ export default function ListeningLab({ store, onXP }) {
           <Card>
             <div className="text-sm text-slate-400">Tips for clarity</div>
             <ul className="mt-2 text-sm list-disc pl-5 space-y-1 text-slate-300">
-              <li>Choose a clear voice (e.g., <b>Samantha</b>, <b>Karen</b>, <b>Daniel</b>) if available.</li>
+              <li>Prefer a <b>Google</b> voice (e.g., “Google US English”) when available.</li>
               <li>Use <b>Slow</b> or <b>Clarity</b> mode to hear it clearly, then normally.</li>
               <li><b>Word-by-word</b> mode helps you hear each word distinctly.</li>
               <li>Repeat or enable <b>Loop</b> for shadowing practice.</li>
