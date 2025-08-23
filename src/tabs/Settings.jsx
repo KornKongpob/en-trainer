@@ -420,22 +420,23 @@ function ManageWords({ store, setStore }) {
 
   function addWord() {
     if (!en.trim() || !th.trim()) return alert("Please enter EN and TH.");
-    const nextId = (store.deck[store.deck.length - 1]?.id || 0) + 1;
-    const newCard = { id: nextId, en, th, pos, example, syn };
-    const newDeck = [...store.deck, newCard];
-    setStore((s) => ({
-      ...s,
-      deck: newDeck,
-      cards: {
-        ...s.cards,
-        [nextId]: {
-          ef: 2.5, interval: 0, due: todayKey(), dueAt: Date.now(),
-          correct: 0, wrong: 0, reps: 0, reviews: 0, introduced: false, introducedOn: null,
-          lastLatencyMs: null, avgLatencyMs: null, latencyCount: 0, latencyHistory: [],
-          penaltyDateKey: null, penaltyLevelToday: 0,
+    setStore(s => {
+      const nextId = (s.deck[s.deck.length - 1]?.id || 0) + 1;
+      const newCard = { id: nextId, en, th, pos, example, syn };
+      return {
+        ...s,
+        deck: [...s.deck, newCard],
+        cards: {
+          ...s.cards,
+          [nextId]: {
+            ef: 2.5, interval: 0, due: todayKey(), dueAt: Date.now(),
+            correct: 0, wrong: 0, reps: 0, reviews: 0, introduced: false, introducedOn: null,
+            lastLatencyMs: null, avgLatencyMs: null, latencyCount: 0, latencyHistory: [],
+            penaltyDateKey: null, penaltyLevelToday: 0,
+          }
         }
-      }
-    }));
+      };
+    });
     setEn(""); setTh(""); setExample(""); setPos("noun"); setSyn("");
   }
 
@@ -446,19 +447,42 @@ function ManageWords({ store, setStore }) {
 
   function updateWord() {
     if (!editingId) return;
-    const newDeck = store.deck.map((c) => c.id === editingId ? { ...c, en, th, example, pos, syn } : c);
-    setStore((s) => ({ ...s, deck: newDeck }));
+    setStore(s => ({
+      ...s,
+      deck: s.deck.map(c => c.id === editingId ? { ...c, en, th, example, pos, syn } : c),
+    }));
     setEditingId(null); setEn(""); setTh(""); setExample(""); setPos("noun"); setSyn("");
   }
 
+  // ✅ functional update so single deletes also work reliably
   function deleteWord(id) {
     if (!confirm("Delete this word?")) return;
-    const newDeck = store.deck.filter((c) => c.id !== id);
-    const newCards = { ...store.cards };
-    delete newCards[id];
-    setStore((s) => ({ ...s, deck: newDeck, cards: newCards }));
+    setStore(s => {
+      const nextDeck = s.deck.filter(c => c.id !== id);
+      const nextCards = { ...s.cards };
+      delete nextCards[id];
+      return { ...s, deck: nextDeck, cards: nextCards };
+    });
     if (editingId === id) { setEditingId(null); setEn(""); setTh(""); setExample(""); setPos("noun"); setSyn(""); }
-    setSelected((prev) => { const n = new Set(prev); n.delete(id); return n; });
+    setSelected(prev => { const n = new Set(prev); n.delete(id); return n; });
+  }
+
+  // ✅ bulk delete for “Select all (visible) → Delete selected”
+  function deleteSelected() {
+    if (selected.size === 0) return;
+    const ids = Array.from(selected);
+    if (!confirm(`Delete ${ids.length} selected word(s)?`)) return;
+    setStore(s => {
+      const toRemove = new Set(ids);
+      const nextDeck = s.deck.filter(c => !toRemove.has(c.id));
+      const nextCards = { ...s.cards };
+      ids.forEach(id => { delete nextCards[id]; });
+      return { ...s, deck: nextDeck, cards: nextCards };
+    });
+    if (editingId && selected.has(editingId)) {
+      setEditingId(null); setEn(""); setTh(""); setExample(""); setPos("noun"); setSyn("");
+    }
+    setSelected(new Set());
   }
 
   const filtered = useMemo(() => {
@@ -471,16 +495,17 @@ function ManageWords({ store, setStore }) {
     );
   }, [store.deck, query]);
 
-  const allVisibleSelected = filtered.length && filtered.every(item => selected.has(item.id));
+  const allVisibleSelected = filtered.length > 0 && filtered.every(item => selected.has(item.id));
+
   function toggleSelect(id, checked) {
-    setSelected((prev) => {
+    setSelected(prev => {
       const next = new Set(prev);
       if (checked) next.add(id); else next.delete(id);
       return next;
     });
   }
   function toggleSelectAllVisible(checked) {
-    setSelected((prev) => {
+    setSelected(prev => {
       const next = new Set(prev);
       if (checked) filtered.forEach(item => next.add(item.id));
       else filtered.forEach(item => next.delete(item.id));
@@ -502,7 +527,7 @@ function ManageWords({ store, setStore }) {
           Select all (visible)
         </label>
         {selected.size > 0 && (
-          <button onClick={()=>{ const ids = Array.from(selected); ids.forEach(deleteWord); setSelected(new Set()); }} className="px-3 py-2 bg-red-500 rounded hover:bg-red-600 text-sm">
+          <button onClick={deleteSelected} className="px-3 py-2 bg-red-500 rounded hover:bg-red-600 text-sm">
             Delete selected ({selected.size})
           </button>
         )}
@@ -548,7 +573,7 @@ function ManageWords({ store, setStore }) {
                   {item.syn ? <span className="block text-xs text-emerald-300 mt-1">Syn: {item.syn}</span> : null}
                 </span>
                 <div className="flex gap-2 shrink-0">
-                  <button onClick={() => { setEditingId(item.id); setEn(item.en); setTh(item.th); setExample(item.example || ""); setPos(item.pos || "noun"); setSyn(item.syn || ""); }} className="px-2 py-1 bg-yellow-500 rounded hover:bg-yellow-600 text-sm">Edit</button>
+                  <button onClick={() => startEdit(item)} className="px-2 py-1 bg-yellow-500 rounded hover:bg-yellow-600 text-sm">Edit</button>
                   <button onClick={() => deleteWord(item.id)} className="px-2 py-1 bg-red-500 rounded hover:bg-red-600 text-sm">Delete</button>
                 </div>
               </li>
