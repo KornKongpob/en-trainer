@@ -142,6 +142,23 @@ export default function App() {
     if (store.theme === "dark") root.classList.add("dark"); else root.classList.remove("dark");
   }, [store.theme]);
 
+  // 🔊 Pre-warm system voices on first user interaction / onvoiceschanged
+  useEffect(() => {
+    const s = window?.speechSynthesis;
+    if (!s) return;
+    const kick = () => {
+      try { s.getVoices?.(); } catch {}
+      s.onvoiceschanged = null;
+      document.removeEventListener("click", kick);
+      document.removeEventListener("touchstart", kick);
+    };
+    if (!(s.getVoices?.() || []).length) {
+      s.onvoiceschanged = kick;
+      document.addEventListener("click", kick, { once: true });
+      document.addEventListener("touchstart", kick, { once: true });
+    }
+  }, []);
+
   // Daily introduction of new words (create per-card progress lazily)
   useEffect(() => {
     const today = todayKey();
@@ -292,6 +309,9 @@ async function ttsSpeak(text, lang, tts) {
   try {
     const synth = window.speechSynthesis;
     if (!synth) return;
+
+    // Wake up iOS/Safari/PWAs if paused
+    try { synth.resume(); } catch {}
 
     const voices = await ensureVoicesReady();
     const u = new SpeechSynthesisUtterance(String(text));

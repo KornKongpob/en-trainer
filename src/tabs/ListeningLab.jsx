@@ -14,6 +14,15 @@ function Card({ children }) {
 const clamp = (n, a, b) => Math.min(b, Math.max(a, n));
 const voiceToKey = (v) => `${v.name}__${v.lang}`;
 
+// Wake system TTS if paused (iOS/Safari/PWAs)
+function resumeSynth() {
+  try {
+    const s = window?.speechSynthesis;
+    if (!s) return;
+    s.resume?.();
+  } catch {}
+}
+
 export default function ListeningLab({ store, setStore, onXP }) {
   // ----- Source of text -----
   const [source, setSource] = useState("deck");
@@ -191,6 +200,7 @@ export default function ListeningLab({ store, setStore, onXP }) {
   async function speakOnce(text, { rate, pitch, volume, voice, token }) {
     return new Promise((resolve) => {
       try {
+        resumeSynth();
         const u = new SpeechSynthesisUtterance(text);
         if (voice) u.voice = voice;
         u.rate = rate;
@@ -448,7 +458,6 @@ export default function ListeningLab({ store, setStore, onXP }) {
               onChange={(e) => setPiperVoice(e.target.value)}
             >
               <option value="en_US-hfc_female-medium">en_US-hfc_female-medium</option>
-              {/* Later: populate from listVoices() */}
             </select>
             {usePiper && !piperReady && (
               <span className="text-xs text-slate-300">Downloading… {piperPct}%</span>
@@ -528,7 +537,7 @@ export default function ListeningLab({ store, setStore, onXP }) {
 
             {/* Piper play/stop */}
             <button
-              onClick={() => piperSpeak(expected, { voiceId: piperVoice })}
+              onClick={() => { resumeSynth(); piperSpeak(expected, { voiceId: piperVoice }); }}
               disabled={!usePiper || !expected || !piperReady}
               className={classNames(
                 "inline-flex items-center gap-2 rounded bg-white/10 px-3 py-2",

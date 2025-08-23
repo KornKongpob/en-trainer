@@ -49,6 +49,15 @@ function safeProgress(p) {
   };
 }
 
+// Wake up iOS/Safari/PWA TTS if paused
+function resumeSynth() {
+  try {
+    const s = window?.speechSynthesis;
+    if (!s) return;
+    s.resume?.();
+  } catch {}
+}
+
 /* ========= SM-2 / stages / timing / penalties ========= */
 function sm2Step(progress, quality, baseIntervals) {
   let { ef = 2.5, interval = 0, reps = 0 } = progress;
@@ -401,6 +410,7 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
     const voiceId = store?.tts?.piperVoiceId || "en_US-hfc_female-medium";
     if (usePiper) {
       try {
+        resumeSynth();
         await piperDownload(voiceId); // cached after first time
         await piperSpeak(text, { voiceId });
         return;
@@ -410,12 +420,14 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
     }
     try {
       if (typeof ttsSpeak === "function") {
+        resumeSynth();
         ttsSpeak(text, "en-US");
         return;
       }
     } catch {}
     // ultimate fallback
     try {
+      resumeSynth();
       const u = new SpeechSynthesisUtterance(String(text));
       u.lang = "en-US";
       const synth = window.speechSynthesis;
@@ -439,7 +451,7 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
           {!show && (
             <div className="mt-6">
               <button
-                onClick={() => speakPreferred(card.en)}
+                onClick={() => { resumeSynth(); speakPreferred(card.en); }}
                 className="inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm"
               >
                 <Volume2 className="size-4" /> Listen (EN)
