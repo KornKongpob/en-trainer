@@ -1,8 +1,9 @@
 // src/tabs/Flashcards.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Volume2 } from "lucide-react";
+import { downloadVoice as piperDownload, speak as piperSpeak } from "../tts/piperClient";
 
-/* ========= Local helpers (self-contained; avoids white-screen) ========= */
+/* ========= Local helpers ========= */
 const classNames = (...a) => a.filter(Boolean).join(" ");
 const toKeyDate = (d = new Date()) => {
   const y = d.getFullYear();
@@ -10,7 +11,10 @@ const toKeyDate = (d = new Date()) => {
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 };
-const fromKeyDate = (k) => { const [y, m, d] = String(k || "").split("-").map(Number); return new Date(y || 1970, (m || 1) - 1, d || 1); };
+const fromKeyDate = (k) => {
+  const [y, m, d] = String(k || "").split("-").map(Number);
+  return new Date(y || 1970, (m || 1) - 1, d || 1);
+};
 const todayKey = () => toKeyDate();
 const nowMs = () => Date.now();
 const MS = { min: 60_000, hour: 3_600_000, day: 86_400_000 };
@@ -23,18 +27,28 @@ function humanizeMs(ms) {
 }
 
 function safeProgress(p) {
-  // Provide sane defaults so we never crash if a card’s progress is missing
   return {
-    ef: 2.5, interval: 0, reps: 0, reviews: 0, correct: 0, wrong: 0,
-    introduced: false, introducedOn: null,
-    due: todayKey(), dueAt: nowMs(),
-    lastLatencyMs: null, avgLatencyMs: null, latencyCount: 0, latencyHistory: [],
-    penaltyDateKey: null, penaltyLevelToday: 0,
+    ef: 2.5,
+    interval: 0,
+    reps: 0,
+    reviews: 0,
+    correct: 0,
+    wrong: 0,
+    introduced: false,
+    introducedOn: null,
+    due: todayKey(),
+    dueAt: nowMs(),
+    lastLatencyMs: null,
+    avgLatencyMs: null,
+    latencyCount: 0,
+    latencyHistory: [],
+    penaltyDateKey: null,
+    penaltyLevelToday: 0,
     ...(p || {}),
   };
 }
 
-/* ================= SM-2 / stages / timing / penalties ================= */
+/* ========= SM-2 / stages / timing / penalties ========= */
 function sm2Step(progress, quality, baseIntervals) {
   let { ef = 2.5, interval = 0, reps = 0 } = progress;
   ef = Math.max(1.3, ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)));
@@ -55,9 +69,9 @@ function sm2Step(progress, quality, baseIntervals) {
   return { ef, interval, reps };
 }
 
-function baseStageFor(prog) {
-  const p = safeProgress(prog);
-  const intro = p.introducedOn;
+function baseStageFor(progIn) {
+  const prog = safeProgress(progIn);
+  const intro = prog.introducedOn;
   if (!intro) return "day3plus";
   const t = todayKey();
   if (t === intro) return "day1";
@@ -84,14 +98,14 @@ function computeTimingFactor(latencyMs, timing) {
 function penaltyMultiplier(level, grade) {
   if (level <= 0) return 1;
   if (level === 1) {
-    if (grade === "hard") return 0.40;
-    if (grade === "good") return 0.60;
-    if (grade === "easy") return 0.60;
+    if (grade === "hard") return 0.4;
+    if (grade === "good") return 0.6;
+    if (grade === "easy") return 0.6;
   }
   // level >= 2
   if (grade === "hard") return 0.25;
-  if (grade === "good") return 0.50;
-  if (grade === "easy") return 0.50;
+  if (grade === "good") return 0.5;
+  if (grade === "easy") return 0.5;
   return 1;
 }
 
@@ -109,36 +123,86 @@ function computeNext(progressIn, grade, settings, latencyHintMs) {
 
   // Day 1
   if (stage === "day1") {
-    if (grade === "again") return { ef: dropEF(progress.ef, 0.15), interval: 0, reps: dropReps(progress.reps), reviews: progress.reviews, ...mkDue(Math.max(1, Number(day1?.againMins ?? 5)) * MS.min) };
-    if (grade === "hard")  return { ef: dropEF(progress.ef, 0.05), interval: 0, reps: progress.reps || 0, reviews: progress.reviews, ...mkDue(Math.max(1, Number(day1?.hardMins ?? 10)) * MS.min) };
-    if (grade === "good")  { const s = sm2Step(progress, 4, intervals); const d = Math.max(1, Number(day1?.goodDays ?? 1)); return { ...s, interval: d, reviews: progress.reviews, ...mkDue(d * MS.day) }; }
-    if (grade === "easy")  { const s = sm2Step(progress, 5, intervals); const d = Math.max(1, Number(day1?.easyDays ?? 2)); return { ...s, interval: d, reviews: progress.reviews, ...mkDue(d * MS.day) }; }
+    if (grade === "again")
+      return {
+        ef: dropEF(progress.ef, 0.15),
+        interval: 0,
+        reps: dropReps(progress.reps),
+        reviews: progress.reviews,
+        ...mkDue(Math.max(1, Number(day1?.againMins ?? 5)) * MS.min),
+      };
+    if (grade === "hard")
+      return {
+        ef: dropEF(progress.ef, 0.05),
+        interval: 0,
+        reps: progress.reps || 0,
+        reviews: progress.reviews,
+        ...mkDue(Math.max(1, Number(day1?.hardMins ?? 10)) * MS.min),
+      };
+    if (grade === "good") {
+      const s = sm2Step(progress, 4, intervals);
+      const d = Math.max(1, Number(day1?.goodDays ?? 1));
+      return { ...s, interval: d, reviews: progress.reviews, ...mkDue(d * MS.day) };
+    }
+    if (grade === "easy") {
+      const s = sm2Step(progress, 5, intervals);
+      const d = Math.max(1, Number(day1?.easyDays ?? 2));
+      return { ...s, interval: d, reviews: progress.reviews, ...mkDue(d * MS.day) };
+    }
   }
 
   // Day 2
   if (stage === "day2") {
-    if (grade === "again") return { ef: dropEF(progress.ef, 0.15), interval: 0, reps: dropReps(progress.reps), reviews: progress.reviews, ...mkDue(Math.max(1, Number(day2?.againMins ?? 5)) * MS.min) };
-    if (grade === "hard")  return { ef: dropEF(progress.ef, 0.05), interval: 0, reps: progress.reps || 0, reviews: progress.reviews, ...mkDue(Math.max(1, Number(day2?.hardMins ?? 15)) * MS.min) }; // 15m
-    if (grade === "good")  { const s = sm2Step(progress, 4, intervals); const d = Math.max(1, Number(day2?.goodDays ?? 1)); return { ...s, interval: d, reviews: progress.reviews, ...mkDue(d * MS.day) }; }
-    if (grade === "easy")  { const s = sm2Step(progress, 5, intervals); const d = Math.max(1, Number(day2?.easyDays ?? 2)); return { ...s, interval: d, reviews: progress.reviews, ...mkDue(d * MS.day) }; }
+    if (grade === "again")
+      return {
+        ef: dropEF(progress.ef, 0.15),
+        interval: 0,
+        reps: dropReps(progress.reps),
+        reviews: progress.reviews,
+        ...mkDue(Math.max(1, Number(day2?.againMins ?? 5)) * MS.min),
+      };
+    if (grade === "hard")
+      return {
+        ef: dropEF(progress.ef, 0.05),
+        interval: 0,
+        reps: progress.reps || 0,
+        reviews: progress.reviews,
+        ...mkDue(Math.max(1, Number(day2?.hardMins ?? 15)) * MS.min),
+      };
+    if (grade === "good") {
+      const s = sm2Step(progress, 4, intervals);
+      const d = Math.max(1, Number(day2?.goodDays ?? 1));
+      return { ...s, interval: d, reviews: progress.reviews, ...mkDue(d * MS.day) };
+    }
+    if (grade === "easy") {
+      const s = sm2Step(progress, 5, intervals);
+      const d = Math.max(1, Number(day2?.easyDays ?? 2));
+      return { ...s, interval: d, reviews: progress.reviews, ...mkDue(d * MS.day) };
+    }
   }
 
   // Day 3+: Again = fixed 15m
   if (grade === "again") {
-    return { ef: dropEF(progress.ef, 0.15), interval: 0, reps: dropReps(progress.reps), reviews: progress.reviews, ...mkDue(15 * MS.min) };
+    return {
+      ef: dropEF(progress.ef, 0.15),
+      interval: 0,
+      reps: dropReps(progress.reps),
+      reviews: progress.reviews,
+      ...mkDue(15 * MS.min),
+    };
   }
 
   // Day 3+: H/G/E = SM-2 base * timing factor * penalty multiplier (>=1d)
   const quality = grade === "hard" ? 2 : grade === "good" ? 4 : 5;
   const base = sm2Step(progress, quality, intervals || { easy: 3, good: 2, hard: 1 });
   const tf = computeTimingFactor(
-    Number.isFinite(latencyHintMs) ? latencyHintMs : (progress.lastLatencyMs ?? (timing?.fastMs ?? 5000)),
+    Number.isFinite(latencyHintMs) ? latencyHintMs : progress.lastLatencyMs ?? (timing?.fastMs ?? 5000),
     timing
   );
   let days = Math.max(1, Math.round(base.interval * tf));
 
   const today = todayKey();
-  const level = (progress.penaltyDateKey === today) ? (progress.penaltyLevelToday || 0) : 0;
+  const level = progress.penaltyDateKey === today ? progress.penaltyLevelToday || 0 : 0;
   const pMul = penaltyMultiplier(level, grade);
   days = Math.max(1, Math.round(days * pMul));
 
@@ -146,14 +210,23 @@ function computeNext(progressIn, grade, settings, latencyHintMs) {
 }
 
 function previewLabel(progress, grade, settings) {
-  const simulated = computeNext(progress, grade, settings, progress?.lastLatencyMs ?? (settings?.timing?.fastMs ?? 5000));
+  const simulated = computeNext(
+    progress,
+    grade,
+    settings,
+    progress?.lastLatencyMs ?? (settings?.timing?.fastMs ?? 5000)
+  );
   const delta = Math.max(1, (simulated?.dueAt ?? nowMs()) - nowMs());
   return humanizeMs(delta);
 }
 
+/* ========= Simple Card wrapper ========= */
+function Card({ children }) {
+  return <div className="rounded-3xl border border-white/10 bg-white/5 p-4">{children}</div>;
+}
+
 /* ============================== Component ============================== */
 export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
-  // Build due list safely
   const dueCards = useMemo(() => {
     const deck = Array.isArray(store?.deck) ? store.deck : [];
     const cards = store?.cards || {};
@@ -173,14 +246,12 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
   const viewStartRef = useRef(null);
   const measuredLatencyRef = useRef(null);
 
-  // reset timer when card changes
   useEffect(() => {
     setShow(false);
     measuredLatencyRef.current = null;
     viewStartRef.current = Date.now();
   }, [card?.id]);
 
-  // If nothing due
   if (!card) {
     return (
       <Card>
@@ -195,7 +266,6 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
     );
   }
 
-  // Stop timer on "Show translation"
   function onShowTranslation() {
     if (measuredLatencyRef.current == null && viewStartRef.current != null) {
       measuredLatencyRef.current = Date.now() - viewStartRef.current;
@@ -208,27 +278,26 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
     hist.push(latency);
     while (hist.length > 10) hist.shift();
     const count = (updated.latencyCount || 0) + 1;
-    const avg = Number.isFinite(updated.avgLatencyMs) ? ((updated.avgLatencyMs * (count - 1) + latency) / count) : latency;
+    const avg = Number.isFinite(updated.avgLatencyMs)
+      ? (updated.avgLatencyMs * (count - 1) + latency) / count
+      : latency;
     return { ...updated, lastLatencyMs: latency, avgLatencyMs: avg, latencyCount: count, latencyHistory: hist };
   }
 
   function applyGrade(grade) {
-    // stop timer if still running
     let latency = measuredLatencyRef.current;
     if (latency == null && viewStartRef.current != null) {
       latency = Date.now() - viewStartRef.current;
       measuredLatencyRef.current = latency;
     }
 
-    // compute next (uses latency only on Day-3+ H/G/E)
-    const next = computeNext(prog, grade, {
-      intervals: store?.intervals,
-      day1: store?.day1,
-      day2: store?.day2,
-      timing: store?.timing,
-    }, latency);
+    const next = computeNext(
+      prog,
+      grade,
+      { intervals: store?.intervals, day1: store?.day1, day2: store?.day2, timing: store?.timing },
+      latency
+    );
 
-    // updated progress
     let updated = {
       ...prog,
       ...next,
@@ -255,7 +324,6 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
       updated.penaltyLevelToday = 0;
     }
 
-    // attach latency stats
     if (Number.isFinite(latency)) {
       updated = updateLatencyStats(updated, latency);
     }
@@ -268,11 +336,10 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
   // Previews
   const settingsPack = { intervals: store?.intervals, day1: store?.day1, day2: store?.day2, timing: store?.timing };
   const lblAgain = previewLabel(prog, "again", settingsPack);
-  const lblHard  = previewLabel(prog, "hard",  settingsPack);
-  const lblGood  = previewLabel(prog, "good",  settingsPack);
-  const lblEasy  = previewLabel(prog, "easy",  settingsPack);
+  const lblHard = previewLabel(prog, "hard", settingsPack);
+  const lblGood = previewLabel(prog, "good", settingsPack);
+  const lblEasy = previewLabel(prog, "easy", settingsPack);
 
-  // "Due in" display
   const dueInText = (() => {
     const delta = Math.max(0, (prog?.dueAt ?? nowMs()) - nowMs());
     return humanizeMs(delta);
@@ -281,16 +348,34 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
   const leftCount = Math.max(0, dueCards.length - 1);
   const positionLabel = `1/${dueCards.length}`;
 
-  const say = (text, lang) => {
-    try { if (typeof ttsSpeak === "function") return ttsSpeak(text, lang); } catch {}
+  // Speak helper (Piper -> fallback to system TTS via prop)
+  async function speakPreferred(text) {
+    const usePiper = !!store?.tts?.usePiper;
+    const voiceId = store?.tts?.piperVoiceId || "en_US-hfc_female-medium";
+    if (usePiper) {
+      try {
+        await piperDownload(voiceId); // cached after first time
+        await piperSpeak(text, { voiceId });
+        return;
+      } catch (e) {
+        console.warn("Piper failed; falling back to system TTS", e);
+      }
+    }
+    try {
+      if (typeof ttsSpeak === "function") {
+        ttsSpeak(text, "en-US");
+        return;
+      }
+    } catch {}
+    // ultimate fallback
     try {
       const u = new SpeechSynthesisUtterance(String(text));
-      u.lang = lang || "en-US";
+      u.lang = "en-US";
       const synth = window.speechSynthesis;
       synth?.cancel();
       synth?.speak(u);
     } catch {}
-  };
+  }
 
   return (
     <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -298,7 +383,9 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
         <div className="rounded-3xl border border-white/10 bg-white/5 p-6 min-h-[60dvh] sm:min-h-[320px] flex flex-col">
           <div className="flex items-center justify-between text-sm text-slate-300">
             <span>Card {positionLabel}</span>
-            <span>Left in queue now: <b>{leftCount}</b></span>
+            <span>
+              Left in queue now: <b>{leftCount}</b>
+            </span>
           </div>
 
           <div className="mt-2 text-4xl font-extrabold tracking-tight break-words">{card.en}</div>
@@ -307,7 +394,7 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
           {!show && (
             <div className="mt-6">
               <button
-                onClick={() => say(card.en, "en-US")}
+                onClick={() => speakPreferred(card.en)}
                 className="inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm"
               >
                 <Volume2 className="size-4" /> Listen (EN)
@@ -318,8 +405,16 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
           {show && (
             <div className="mt-6 space-y-2">
               <div className="text-xl">{card.th}</div>
-              {card.example ? <div className="text-sm text-slate-300">Example: <i>{card.example}</i></div> : null}
-              {card.syn ? <div className="text-sm text-emerald-200/90"><span className="font-semibold">Synonyms:</span> {card.syn}</div> : null}
+              {card.example ? (
+                <div className="text-sm text-slate-300">
+                  Example: <i>{card.example}</i>
+                </div>
+              ) : null}
+              {card.syn ? (
+                <div className="text-sm text-emerald-200/90">
+                  <span className="font-semibold">Synonyms:</span> {card.syn}
+                </div>
+              ) : null}
             </div>
           )}
 
@@ -332,15 +427,27 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
             </button>
 
             <div className="grid grid-cols-4 gap-2">
-              <button onClick={() => applyGrade("again")} className="w-full rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3">Again ({lblAgain})</button>
-              <button onClick={() => applyGrade("hard")}  className="w-full rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3">Hard ({lblHard})</button>
-              <button onClick={() => applyGrade("good")}  className="w-full rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-3">Good ({lblGood})</button>
-              <button onClick={() => applyGrade("easy")}  className="w-full rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-3">Easy ({lblEasy})</button>
+              <button onClick={() => applyGrade("again")} className="w-full rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3">
+                Again ({lblAgain})
+              </button>
+              <button onClick={() => applyGrade("hard")} className="w-full rounded-xl bg-white/10 hover:bg-white/20 px-4 py-3">
+                Hard ({lblHard})
+              </button>
+              <button
+                onClick={() => applyGrade("good")}
+                className="w-full rounded-xl bg-amber-500/20 hover:bg-amber-500/30 px-4 py-3"
+              >
+                Good ({lblGood})
+              </button>
+              <button
+                onClick={() => applyGrade("easy")}
+                className="w-full rounded-xl bg-emerald-500/30 hover:bg-emerald-500/40 px-4 py-3"
+              >
+                Easy ({lblEasy})
+              </button>
             </div>
 
-            <div className="text-xs text-slate-400 pt-1">
-              Next due for this card: <b>{dueInText}</b>
-            </div>
+            <div className="text-xs text-slate-400 pt-1">Next due for this card: <b>{dueInText}</b></div>
           </div>
         </div>
       </div>
@@ -366,9 +473,4 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
       </div>
     </section>
   );
-}
-
-/* Simple Card wrapper for consistent styling */
-function Card({ children }) {
-  return <div className="rounded-3xl border border-white/10 bg-white/5 p-4">{children}</div>;
 }

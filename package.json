@@ -8,14 +8,16 @@
     "build": "node node_modules/vite/bin/vite.js build",
     "preview": "node node_modules/vite/bin/vite.js preview --port 4173"
   },
- "dependencies": {
-  "react": "^19.1.1",
-  "react-dom": "^19.1.1",
-  "framer-motion": "^12.23.12",
-  "lucide-react": "^0.539.0",
-  "recharts": "^3.1.2",
-  "ajv": "8.12.0"
-},
+  "dependencies": {
+    "@mintplex-labs/piper-tts-web": "^1.0.4",
+    "ajv": "8.12.0",
+    "framer-motion": "^12.23.12",
+    "lucide": "^0.541.0",
+    "lucide-react": "^0.541.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "recharts": "^3.1.2"
+  },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
     "@vitejs/plugin-react": "^4.3.4",

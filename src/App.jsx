@@ -80,7 +80,10 @@ export default function App() {
     day1: { againMins: 5, hardMins: 10, goodDays: 1, easyDays: 2 },
     day2: { againMins: 5, hardMins: 15, goodDays: 1, easyDays: 2 },
     timing: { fastMs: 5000, slowMs: 25000, clampMin: 0.75, clampMax: 1.25 },
-    tts: { enVoice: "", thVoice: "", rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false }
+    tts: {enVoice: "", thVoice: "",
+  rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false,
+  usePiper: false,                          
+  piperVoiceId: 'en_US-hfc_female-medium'},
   });
 
   // Patch older saves to include new keys/fields
@@ -92,7 +95,10 @@ export default function App() {
       if (!patched.day1) patched.day1 = { againMins: 5, hardMins: 10, goodDays: 1, easyDays: 2 };
       if (!patched.day2) patched.day2 = { againMins: 5, hardMins: 15, goodDays: 1, easyDays: 2 };
       if (!patched.timing) patched.timing = { fastMs: 5000, slowMs: 25000, clampMin: 0.75, clampMax: 1.25 };
-      if (!patched.tts) patched.tts = { enVoice: "", thVoice: "", rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false };
+      if (!patched.tts) patched.tts = { enVoice: "", thVoice: "", rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false, usePiper: false, piperVoiceId: 'en_US-hfc_female-medium' };
+      if (!('usePiper' in patched.tts)) patched.tts.usePiper = false;
+      if (!patched.tts.piperVoiceId) patched.tts.piperVoiceId = 'en_US-hfc_female-medium';
+
       // ensure deck has syn key
       patched.deck = (patched.deck || []).map(d => ({ syn: "", ...d }));
       // ensure cards object exists
