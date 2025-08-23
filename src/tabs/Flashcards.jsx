@@ -95,23 +95,29 @@ function computeTimingFactor(latencyMs, timing) {
   return Math.max(clampMin, Math.min(clampMax, mul));
 }
 
-function penaltyMultiplier(level, grade) {
+/* NEW: penalty multiplier uses settings.penalties */
+function penaltyMultiplier(level, grade, penalties) {
   if (level <= 0) return 1;
-  if (level === 1) {
-    if (grade === "hard") return 0.4;
-    if (grade === "good") return 0.6;
-    if (grade === "easy") return 0.6;
-  }
-  // level >= 2
-  if (grade === "hard") return 0.25;
-  if (grade === "good") return 0.5;
-  if (grade === "easy") return 0.5;
-  return 1;
+
+  const l1 = penalties?.l1 || { hard: 0.40, good: 0.60, easy: 0.60 };
+  const l2 = penalties?.l2plus || { hard: 0.25, good: 0.50, easy: 0.50 };
+  const compound = !!penalties?.compoundAfterL1;
+  const maxLevel = Math.max(1, Number(penalties?.maxLevel ?? 10));
+  const g = grade === "hard" ? "hard" : grade === "easy" ? "easy" : "good";
+
+  const lvl = Math.min(level, maxLevel);
+  if (lvl === 1) return Number(l1[g] ?? 1);
+
+  const base = Number(l2[g] ?? 1);
+  if (!compound) return base;
+
+  const out = Math.pow(base, lvl - 1);
+  return Math.max(0.05, Math.min(1, out));
 }
 
 function computeNext(progressIn, grade, settings, latencyHintMs) {
   const progress = safeProgress(progressIn);
-  const { intervals, day1, day2, timing } = settings || {};
+  const { intervals, day1, day2, timing, penalties } = settings || {};
   const stage = baseStageFor(progress);
 
   const mkDue = (deltaMs) => {
@@ -181,14 +187,15 @@ function computeNext(progressIn, grade, settings, latencyHintMs) {
     }
   }
 
-  // Day 3+: Again = fixed 15m
+  // Day 3+: Again = configurable minutes
   if (grade === "again") {
+    const mins = Math.max(1, Number(penalties?.day3AgainMins ?? 15));
     return {
       ef: dropEF(progress.ef, 0.15),
       interval: 0,
       reps: dropReps(progress.reps),
       reviews: progress.reviews,
-      ...mkDue(15 * MS.min),
+      ...mkDue(mins * MS.min),
     };
   }
 
@@ -203,7 +210,7 @@ function computeNext(progressIn, grade, settings, latencyHintMs) {
 
   const today = todayKey();
   const level = progress.penaltyDateKey === today ? progress.penaltyLevelToday || 0 : 0;
-  const pMul = penaltyMultiplier(level, grade);
+  const pMul = penaltyMultiplier(level, grade, penalties);
   days = Math.max(1, Math.round(days * pMul));
 
   return { ef: base.ef, interval: days, reps: base.reps, reviews: progress.reviews, ...mkDue(days * MS.day) };
@@ -294,7 +301,13 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
     const next = computeNext(
       prog,
       grade,
-      { intervals: store?.intervals, day1: store?.day1, day2: store?.day2, timing: store?.timing },
+      {
+        intervals: store?.intervals,
+        day1: store?.day1,
+        day2: store?.day2,
+        timing: store?.timing,
+        penalties: store?.penalties,
+      },
       latency
     );
 
@@ -309,10 +322,11 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
     // Day-3+ penalty tracking
     const stage = baseStageFor(prog);
     const today = todayKey();
+    const maxLevel = Math.max(1, Number(store?.penalties?.maxLevel ?? 10));
     if (stage === "day3plus") {
       if (grade === "again") {
         const sameDay = prog.penaltyDateKey === today;
-        const level = sameDay ? Math.min(10, (prog.penaltyLevelToday || 0) + 1) : 1;
+        const level = sameDay ? Math.min(maxLevel, (prog.penaltyLevelToday || 0) + 1) : 1;
         updated.penaltyDateKey = today;
         updated.penaltyLevelToday = level;
       } else {
@@ -333,8 +347,14 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
     setShow(false);
   }
 
-  // Previews
-  const settingsPack = { intervals: store?.intervals, day1: store?.day1, day2: store?.day2, timing: store?.timing };
+  // Previews (include penalties in settings)
+  const settingsPack = {
+    intervals: store?.intervals,
+    day1: store?.day1,
+    day2: store?.day2,
+    timing: store?.timing,
+    penalties: store?.penalties,
+  };
   const lblAgain = previewLabel(prog, "again", settingsPack);
   const lblHard = previewLabel(prog, "hard", settingsPack);
   const lblGood = previewLabel(prog, "good", settingsPack);
@@ -447,7 +467,9 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
               </button>
             </div>
 
-            <div className="text-xs text-slate-400 pt-1">Next due for this card: <b>{dueInText}</b></div>
+            <div className="text-xs text-slate-4 00 pt-1">
+              Next due for this card: <b>{dueInText}</b>
+            </div>
           </div>
         </div>
       </div>

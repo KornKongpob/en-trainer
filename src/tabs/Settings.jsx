@@ -1,6 +1,5 @@
 // src/tabs/Settings.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { CalendarCheck2, Sparkles } from "lucide-react";
 
 const classNames = (...a) => a.filter(Boolean).join(" ");
 const last = (arr) => (Array.isArray(arr) && arr.length ? arr[arr.length - 1] : null);
@@ -17,7 +16,7 @@ function Card({ children }) {
 }
 
 export default function Settings({ store, setStore }) {
-  const [tab, setTab] = useState("general"); // general | day1 | timing | audio | import | manage
+  const [tab, setTab] = useState("general"); // general | day1 | timing | penalties | audio | import | manage
 
   return (
     <Card>
@@ -26,6 +25,7 @@ export default function Settings({ store, setStore }) {
         <button onClick={()=>setTab("general")} className={classNames("px-3 py-2 rounded", tab==="general"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>General</button>
         <button onClick={()=>setTab("day1")} className={classNames("px-3 py-2 rounded", tab==="day1"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Day-1 & Day-2</button>
         <button onClick={()=>setTab("timing")} className={classNames("px-3 py-2 rounded", tab==="timing"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Timing</button>
+        <button onClick={()=>setTab("penalties")} className={classNames("px-3 py-2 rounded", tab==="penalties"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Penalties</button>
         <button onClick={()=>setTab("audio")} className={classNames("px-3 py-2 rounded", tab==="audio"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Audio / TTS</button>
         <button onClick={()=>setTab("import")} className={classNames("px-3 py-2 rounded", tab==="import"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Import CSV</button>
         <button onClick={()=>setTab("manage")} className={classNames("px-3 py-2 rounded", tab==="manage"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Manage Words</button>
@@ -34,6 +34,7 @@ export default function Settings({ store, setStore }) {
       {tab === "general" && <GeneralSettings store={store} setStore={setStore} />}
       {tab === "day1" && <Day12Settings store={store} setStore={setStore} />}
       {tab === "timing" && <TimingSettings store={store} setStore={setStore} />}
+      {tab === "penalties" && <PenaltySettings store={store} setStore={setStore} />}
       {tab === "audio" && <AudioSettings store={store} setStore={setStore} />}
       {tab === "import" && <ContentManager store={store} setStore={setStore} />}
       {tab === "manage" && <ManageWords store={store} setStore={setStore} />}
@@ -103,7 +104,7 @@ function Day12Settings({ store, setStore }) {
   const [d1Easy, setD1Easy] = useState(store.day1?.easyDays ?? 2);
 
   const [d2Again, setD2Again] = useState(store.day2?.againMins ?? 5);
-  const [d2Hard, setD2Hard] = useState(store.day2?.hardMins ?? 15); // default 15m per your spec
+  const [d2Hard, setD2Hard] = useState(store.day2?.hardMins ?? 15);
   const [d2Good, setD2Good] = useState(store.day2?.goodDays ?? 1);
   const [d2Easy, setD2Easy] = useState(store.day2?.easyDays ?? 2);
 
@@ -203,6 +204,110 @@ function TimingSettings({ store, setStore }) {
 
       <div className="mt-3">
         <button onClick={save} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save timing</button>
+      </div>
+    </>
+  );
+}
+
+/* =============== Penalties (NEW) =============== */
+function PenaltySettings({ store, setStore }) {
+  const defaults = {
+    day3AgainMins: 15,
+    l1: { hard: 0.40, good: 0.60, easy: 0.60 },
+    l2plus: { hard: 0.25, good: 0.50, easy: 0.50 },
+    maxLevel: 10,
+    compoundAfterL1: false,
+  };
+  const p0 = store.penalties || defaults;
+
+  const [day3AgainMins, setDay3AgainMins] = useState(p0.day3AgainMins ?? 15);
+  const [l1Hard, setL1Hard] = useState(p0.l1?.hard ?? 0.40);
+  const [l1Good, setL1Good] = useState(p0.l1?.good ?? 0.60);
+  const [l1Easy, setL1Easy] = useState(p0.l1?.easy ?? 0.60);
+  const [l2Hard, setL2Hard] = useState(p0.l2plus?.hard ?? 0.25);
+  const [l2Good, setL2Good] = useState(p0.l2plus?.good ?? 0.50);
+  const [l2Easy, setL2Easy] = useState(p0.l2plus?.easy ?? 0.50);
+  const [maxLevel, setMaxLevel] = useState(p0.maxLevel ?? 10);
+  const [compoundAfterL1, setCompoundAfterL1] = useState(!!p0.compoundAfterL1);
+
+  function save() {
+    setStore((s) => ({
+      ...s,
+      penalties: {
+        day3AgainMins: Math.max(1, Number(day3AgainMins)),
+        l1: { hard: +l1Hard, good: +l1Good, easy: +l1Easy },
+        l2plus: { hard: +l2Hard, good: +l2Good, easy: +l2Easy },
+        maxLevel: Math.max(1, Number(maxLevel)),
+        compoundAfterL1: !!compoundAfterL1,
+      },
+    }));
+  }
+
+  return (
+    <>
+      <div className="text-sm mb-3">
+        Controls how much the next interval shrinks on Day-3+ when you press <b>Again</b> (and then choose Hard/Good/Easy afterwards).
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <Card>
+          <div className="font-semibold mb-2">Day-3+ “Again” delay</div>
+          <label className="flex items-center gap-2">
+            Again delay (minutes):
+            <input type="number" min={1} className="w-28 rounded p-2 bg-white text-black"
+                   value={day3AgainMins} onChange={(e)=>setDay3AgainMins(e.target.value)} />
+          </label>
+          <div className="text-xs text-slate-400 mt-1">After pressing Again on Day-3+, the card returns after this fixed delay.</div>
+        </Card>
+
+        <Card>
+          <div className="font-semibold mb-2">Level-1 multipliers (first Again today)</div>
+          <div className="grid grid-cols-3 gap-2 items-end">
+            <label className="text-sm">Hard
+              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l1Hard} onChange={(e)=>setL1Hard(e.target.value)} />
+            </label>
+            <label className="text-sm">Good
+              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l1Good} onChange={(e)=>setL1Good(e.target.value)} />
+            </label>
+            <label className="text-sm">Easy
+              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l1Easy} onChange={(e)=>setL1Easy(e.target.value)} />
+            </label>
+          </div>
+        </Card>
+
+        <Card>
+          <div className="font-semibold mb-2">Level ≥2 multipliers (second+ Again today)</div>
+          <div className="grid grid-cols-3 gap-2 items-end">
+            <label className="text-sm">Hard
+              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l2Hard} onChange={(e)=>setL2Hard(e.target.value)} />
+            </label>
+            <label className="text-sm">Good
+              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l2Good} onChange={(e)=>setL2Good(e.target.value)} />
+            </label>
+            <label className="text-sm">Easy
+              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l2Easy} onChange={(e)=>setL2Easy(e.target.value)} />
+            </label>
+          </div>
+          <label className="flex items-center gap-2 mt-3">
+            <input type="checkbox" checked={compoundAfterL1} onChange={(e)=>setCompoundAfterL1(e.target.checked)} />
+            Compound L2+ (apply ^level)
+          </label>
+          <div className="text-xs text-slate-400 mt-1">If checked, level≥2 applies multiplier^(level−1). Otherwise it uses the same L2+ multiplier for all further Agains.</div>
+        </Card>
+
+        <Card>
+          <div className="font-semibold mb-2">Safety</div>
+          <label className="flex items-center gap-2">
+            Max penalty level per day:
+            <input type="number" min={1} className="w-28 rounded p-2 bg-white text-black"
+                   value={maxLevel} onChange={(e)=>setMaxLevel(e.target.value)} />
+          </label>
+          <div className="text-xs text-slate-400 mt-1">Caps how much penalties escalate in a single day.</div>
+        </Card>
+      </div>
+
+      <div className="mt-4">
+        <button onClick={save} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save penalties</button>
       </div>
     </>
   );
@@ -420,23 +525,22 @@ function ManageWords({ store, setStore }) {
 
   function addWord() {
     if (!en.trim() || !th.trim()) return alert("Please enter EN and TH.");
-    setStore(s => {
-      const nextId = (s.deck[s.deck.length - 1]?.id || 0) + 1;
-      const newCard = { id: nextId, en, th, pos, example, syn };
-      return {
-        ...s,
-        deck: [...s.deck, newCard],
-        cards: {
-          ...s.cards,
-          [nextId]: {
-            ef: 2.5, interval: 0, due: todayKey(), dueAt: Date.now(),
-            correct: 0, wrong: 0, reps: 0, reviews: 0, introduced: false, introducedOn: null,
-            lastLatencyMs: null, avgLatencyMs: null, latencyCount: 0, latencyHistory: [],
-            penaltyDateKey: null, penaltyLevelToday: 0,
-          }
+    const nextId = (store.deck[store.deck.length - 1]?.id || 0) + 1;
+    const newCard = { id: nextId, en, th, pos, example, syn };
+    const newDeck = [...store.deck, newCard];
+    setStore((s) => ({
+      ...s,
+      deck: newDeck,
+      cards: {
+        ...s.cards,
+        [nextId]: {
+          ef: 2.5, interval: 0, due: todayKey(), dueAt: Date.now(),
+          correct: 0, wrong: 0, reps: 0, reviews: 0, introduced: false, introducedOn: null,
+          lastLatencyMs: null, avgLatencyMs: null, latencyCount: 0, latencyHistory: [],
+          penaltyDateKey: null, penaltyLevelToday: 0,
         }
-      };
-    });
+      }
+    }));
     setEn(""); setTh(""); setExample(""); setPos("noun"); setSyn("");
   }
 
@@ -447,42 +551,19 @@ function ManageWords({ store, setStore }) {
 
   function updateWord() {
     if (!editingId) return;
-    setStore(s => ({
-      ...s,
-      deck: s.deck.map(c => c.id === editingId ? { ...c, en, th, example, pos, syn } : c),
-    }));
+    const newDeck = store.deck.map((c) => c.id === editingId ? { ...c, en, th, example, pos, syn } : c);
+    setStore((s) => ({ ...s, deck: newDeck }));
     setEditingId(null); setEn(""); setTh(""); setExample(""); setPos("noun"); setSyn("");
   }
 
-  // ✅ functional update so single deletes also work reliably
   function deleteWord(id) {
     if (!confirm("Delete this word?")) return;
-    setStore(s => {
-      const nextDeck = s.deck.filter(c => c.id !== id);
-      const nextCards = { ...s.cards };
-      delete nextCards[id];
-      return { ...s, deck: nextDeck, cards: nextCards };
-    });
+    const newDeck = store.deck.filter((c) => c.id !== id);
+    const newCards = { ...store.cards };
+    delete newCards[id];
+    setStore((s) => ({ ...s, deck: newDeck, cards: newCards }));
     if (editingId === id) { setEditingId(null); setEn(""); setTh(""); setExample(""); setPos("noun"); setSyn(""); }
-    setSelected(prev => { const n = new Set(prev); n.delete(id); return n; });
-  }
-
-  // ✅ bulk delete for “Select all (visible) → Delete selected”
-  function deleteSelected() {
-    if (selected.size === 0) return;
-    const ids = Array.from(selected);
-    if (!confirm(`Delete ${ids.length} selected word(s)?`)) return;
-    setStore(s => {
-      const toRemove = new Set(ids);
-      const nextDeck = s.deck.filter(c => !toRemove.has(c.id));
-      const nextCards = { ...s.cards };
-      ids.forEach(id => { delete nextCards[id]; });
-      return { ...s, deck: nextDeck, cards: nextCards };
-    });
-    if (editingId && selected.has(editingId)) {
-      setEditingId(null); setEn(""); setTh(""); setExample(""); setPos("noun"); setSyn("");
-    }
-    setSelected(new Set());
+    setSelected((prev) => { const n = new Set(prev); n.delete(id); return n; });
   }
 
   const filtered = useMemo(() => {
@@ -495,17 +576,16 @@ function ManageWords({ store, setStore }) {
     );
   }, [store.deck, query]);
 
-  const allVisibleSelected = filtered.length > 0 && filtered.every(item => selected.has(item.id));
-
+  const allVisibleSelected = filtered.length && filtered.every(item => selected.has(item.id));
   function toggleSelect(id, checked) {
-    setSelected(prev => {
+    setSelected((prev) => {
       const next = new Set(prev);
       if (checked) next.add(id); else next.delete(id);
       return next;
     });
   }
   function toggleSelectAllVisible(checked) {
-    setSelected(prev => {
+    setSelected((prev) => {
       const next = new Set(prev);
       if (checked) filtered.forEach(item => next.add(item.id));
       else filtered.forEach(item => next.delete(item.id));
@@ -527,7 +607,7 @@ function ManageWords({ store, setStore }) {
           Select all (visible)
         </label>
         {selected.size > 0 && (
-          <button onClick={deleteSelected} className="px-3 py-2 bg-red-500 rounded hover:bg-red-600 text-sm">
+          <button onClick={()=>{ const ids = Array.from(selected); ids.forEach(deleteWord); setSelected(new Set()); }} className="px-3 py-2 bg-red-500 rounded hover:bg-red-600 text-sm">
             Delete selected ({selected.size})
           </button>
         )}
@@ -573,7 +653,7 @@ function ManageWords({ store, setStore }) {
                   {item.syn ? <span className="block text-xs text-emerald-300 mt-1">Syn: {item.syn}</span> : null}
                 </span>
                 <div className="flex gap-2 shrink-0">
-                  <button onClick={() => startEdit(item)} className="px-2 py-1 bg-yellow-500 rounded hover:bg-yellow-600 text-sm">Edit</button>
+                  <button onClick={() => { setEditingId(item.id); setEn(item.en); setTh(item.th); setExample(item.example || ""); setPos(item.pos || "noun"); setSyn(item.syn || ""); }} className="px-2 py-1 bg-yellow-500 rounded hover:bg-yellow-600 text-sm">Edit</button>
                   <button onClick={() => deleteWord(item.id)} className="px-2 py-1 bg-red-500 rounded hover:bg-red-600 text-sm">Delete</button>
                 </div>
               </li>

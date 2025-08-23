@@ -80,10 +80,22 @@ export default function App() {
     day1: { againMins: 5, hardMins: 10, goodDays: 1, easyDays: 2 },
     day2: { againMins: 5, hardMins: 15, goodDays: 1, easyDays: 2 },
     timing: { fastMs: 5000, slowMs: 25000, clampMin: 0.75, clampMax: 1.25 },
-    tts: {enVoice: "", thVoice: "",
-  rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false,
-  usePiper: false,                          
-  piperVoiceId: 'en_US-hfc_female-medium'},
+
+    /* NEW: penalty config (for Day-3+ “Again” cycles) */
+    penalties: {
+      day3AgainMins: 15,
+      l1:   { hard: 0.40, good: 0.60, easy: 0.60 },
+      l2plus: { hard: 0.25, good: 0.50, easy: 0.50 },
+      maxLevel: 10,
+      compoundAfterL1: false,
+    },
+
+    tts: {
+      enVoice: "", thVoice: "",
+      rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false,
+      usePiper: false,
+      piperVoiceId: "en_US-hfc_female-medium",
+    },
   });
 
   // Patch older saves to include new keys/fields
@@ -95,9 +107,28 @@ export default function App() {
       if (!patched.day1) patched.day1 = { againMins: 5, hardMins: 10, goodDays: 1, easyDays: 2 };
       if (!patched.day2) patched.day2 = { againMins: 5, hardMins: 15, goodDays: 1, easyDays: 2 };
       if (!patched.timing) patched.timing = { fastMs: 5000, slowMs: 25000, clampMin: 0.75, clampMax: 1.25 };
-      if (!patched.tts) patched.tts = { enVoice: "", thVoice: "", rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false, usePiper: false, piperVoiceId: 'en_US-hfc_female-medium' };
-      if (!('usePiper' in patched.tts)) patched.tts.usePiper = false;
-      if (!patched.tts.piperVoiceId) patched.tts.piperVoiceId = 'en_US-hfc_female-medium';
+
+      // NEW: ensure penalties exist
+      if (!patched.penalties) {
+        patched.penalties = {
+          day3AgainMins: 15,
+          l1:   { hard: 0.40, good: 0.60, easy: 0.60 },
+          l2plus: { hard: 0.25, good: 0.50, easy: 0.50 },
+          maxLevel: 10,
+          compoundAfterL1: false,
+        };
+      }
+
+      if (!patched.tts) {
+        patched.tts = {
+          enVoice: "", thVoice: "",
+          rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false,
+          usePiper: false,
+          piperVoiceId: "en_US-hfc_female-medium",
+        };
+      }
+      if (!("usePiper" in patched.tts)) patched.tts.usePiper = false;
+      if (!patched.tts.piperVoiceId) patched.tts.piperVoiceId = "en_US-hfc_female-medium";
 
       // ensure deck has syn key
       patched.deck = (patched.deck || []).map(d => ({ syn: "", ...d }));
@@ -208,7 +239,8 @@ export default function App() {
           )}
           {tab === "listen" && (
             <motion.div key="listen" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-              <ListeningLab store={store} onXP={addXP} />
+              {/* pass setStore so ListeningLab can persist its toggles (e.g., Piper) */}
+              <ListeningLab store={store} setStore={setStore} onXP={addXP} />
             </motion.div>
           )}
           {tab === "settings" && (
