@@ -1,7 +1,6 @@
 // src/tabs/Flashcards.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, Volume2 } from "lucide-react";
-import { downloadVoice as piperDownload, speak as piperSpeak } from "../tts/piperClient";
 
 /* ========= Local helpers ========= */
 const classNames = (...a) => a.filter(Boolean).join(" ");
@@ -47,15 +46,6 @@ function safeProgress(p) {
     penaltyLevelToday: 0,
     ...(p || {}),
   };
-}
-
-// Wake up iOS/Safari/PWA TTS if paused
-function resumeSynth() {
-  try {
-    const s = window?.speechSynthesis;
-    if (!s) return;
-    s.resume?.();
-  } catch {}
 }
 
 /* ========= SM-2 / stages / timing / penalties ========= */
@@ -404,35 +394,21 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
   const leftCount = Math.max(0, dueCards.length - 1);
   const positionLabel = `1/${dueCards.length}`;
 
-  // Speak helper (Piper -> fallback to system TTS via prop)
-  async function speakPreferred(text) {
-    const usePiper = !!store?.tts?.usePiper;
-    const voiceId = store?.tts?.piperVoiceId || "en_US-hfc_female-medium";
-    if (usePiper) {
-      try {
-        resumeSynth();
-        await piperDownload(voiceId); // cached after first time
-        await piperSpeak(text, { voiceId });
-        return;
-      } catch (e) {
-        console.warn("Piper failed; falling back to system TTS", e);
-      }
-    }
+  // Speak helper: always system TTS here for instant playback
+  function speakPreferred(text) {
     try {
       if (typeof ttsSpeak === "function") {
-        resumeSynth();
         ttsSpeak(text, "en-US");
         return;
       }
     } catch {}
     // ultimate fallback
     try {
-      resumeSynth();
+      const synth = window.speechSynthesis;
+      if (!synth) return;
       const u = new SpeechSynthesisUtterance(String(text));
       u.lang = "en-US";
-      const synth = window.speechSynthesis;
-      synth?.cancel();
-      synth?.speak(u);
+      synth.speak(u);
     } catch {}
   }
 
@@ -451,7 +427,7 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
           {!show && (
             <div className="mt-6">
               <button
-                onClick={() => { resumeSynth(); speakPreferred(card.en); }}
+                onClick={() => speakPreferred(card.en)}
                 className="inline-flex items-center gap-2 rounded-full bg-white/10 hover:bg-white/20 px-3 py-1 text-sm"
               >
                 <Volume2 className="size-4" /> Listen (EN)

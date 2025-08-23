@@ -142,23 +142,6 @@ export default function App() {
     if (store.theme === "dark") root.classList.add("dark"); else root.classList.remove("dark");
   }, [store.theme]);
 
-  // 🔊 Pre-warm system voices on first user interaction / onvoiceschanged
-  useEffect(() => {
-    const s = window?.speechSynthesis;
-    if (!s) return;
-    const kick = () => {
-      try { s.getVoices?.(); } catch {}
-      s.onvoiceschanged = null;
-      document.removeEventListener("click", kick);
-      document.removeEventListener("touchstart", kick);
-    };
-    if (!(s.getVoices?.() || []).length) {
-      s.onvoiceschanged = kick;
-      document.addEventListener("click", kick, { once: true });
-      document.addEventListener("touchstart", kick, { once: true });
-    }
-  }, []);
-
   // Daily introduction of new words (create per-card progress lazily)
   useEffect(() => {
     const today = todayKey();
@@ -310,23 +293,37 @@ async function ttsSpeak(text, lang, tts) {
     const synth = window.speechSynthesis;
     if (!synth) return;
 
-    // Wake up iOS/Safari/PWAs if paused
-    try { synth.resume(); } catch {}
+    // --- iOS/Chrome “wake up” resume loop ---
+    try {
+      const kickId = setInterval(() => {
+        try { synth.resume(); } catch {}
+      }, 200);
+      setTimeout(() => clearInterval(kickId), 1200);
+    } catch {}
 
+    // Make sure voices are loaded; if still empty we’ll speak with default voice
     const voices = await ensureVoicesReady();
+
     const u = new SpeechSynthesisUtterance(String(text));
-    u.lang = lang;
+    u.lang = lang || "en-US";
 
-    const preferredKey = lang?.toLowerCase().startsWith("th") ? tts?.thVoice : tts?.enVoice;
-    const best = pickBestVoice(voices, lang, preferredKey);
-    if (best) u.voice = best;
+    // Pick a voice (prefer saved one; otherwise pick a good Google* EN)
+    try {
+      const preferredKey = (lang || "").toLowerCase().startsWith("th") ? tts?.thVoice : tts?.enVoice;
+      const best = voices && voices.length ? pickBestVoice(voices, u.lang, preferredKey) : null;
+      if (best) u.voice = best;
+    } catch {}
 
-    u.rate = Number(tts?.rate ?? 0.92);
-    u.pitch = Number(tts?.pitch ?? 1.0);
+    // Sliders
+    u.rate   = Number(tts?.rate ?? 0.92);
+    u.pitch  = Number(tts?.pitch ?? 1.0);
     u.volume = Number(tts?.volume ?? 1.0);
 
-    synth.cancel(); // avoid stacking
-    synth.speak(u);
+    // Cancel previous queue then speak on next tick (prevents rare early-cancel)
+    try { synth.cancel(); } catch {}
+    setTimeout(() => {
+      try { synth.speak(u); } catch {}
+    }, 0);
   } catch (e) {
     console.warn("System TTS failed:", e);
   }
