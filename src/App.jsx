@@ -67,8 +67,7 @@ export default function App() {
   const [store, setStore] = usePersistentState({
     theme: "dark",
     deck: DEFAULT_DECK,
-    // cards will be initialized when words are introduced
-    cards: {},
+    cards: {},                 // will be created when introduced
     xp: 0,
     goal: 50,
     streak: 0,
@@ -80,16 +79,13 @@ export default function App() {
     day1: { againMins: 5, hardMins: 10, goodDays: 1, easyDays: 2 },
     day2: { againMins: 5, hardMins: 15, goodDays: 1, easyDays: 2 },
     timing: { fastMs: 5000, slowMs: 25000, clampMin: 0.75, clampMax: 1.25 },
-
-    /* NEW: penalty config (for Day-3+ “Again” cycles) */
     penalties: {
       day3AgainMins: 15,
-      l1:   { hard: 0.40, good: 0.60, easy: 0.60 },
+      l1: { hard: 0.40, good: 0.60, easy: 0.60 },
       l2plus: { hard: 0.25, good: 0.50, easy: 0.50 },
       maxLevel: 10,
       compoundAfterL1: false,
     },
-
     tts: {
       enVoice: "", thVoice: "",
       rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false,
@@ -101,40 +97,31 @@ export default function App() {
   // Patch older saves to include new keys/fields
   useEffect(() => {
     setStore((s) => {
-      const patched = { ...s };
-      if (!patched.intervals) patched.intervals = { easy: 3, good: 2, hard: 1 };
-      if (typeof patched.dailyNew !== "number") patched.dailyNew = 10;
-      if (!patched.day1) patched.day1 = { againMins: 5, hardMins: 10, goodDays: 1, easyDays: 2 };
-      if (!patched.day2) patched.day2 = { againMins: 5, hardMins: 15, goodDays: 1, easyDays: 2 };
-      if (!patched.timing) patched.timing = { fastMs: 5000, slowMs: 25000, clampMin: 0.75, clampMax: 1.25 };
-
-      // NEW: ensure penalties exist
-      if (!patched.penalties) {
-        patched.penalties = {
+      const p = { ...s };
+      if (!p.intervals) p.intervals = { easy: 3, good: 2, hard: 1 };
+      if (typeof p.dailyNew !== "number") p.dailyNew = 10;
+      if (!p.day1) p.day1 = { againMins: 5, hardMins: 10, goodDays: 1, easyDays: 2 };
+      if (!p.day2) p.day2 = { againMins: 5, hardMins: 15, goodDays: 1, easyDays: 2 };
+      if (!p.timing) p.timing = { fastMs: 5000, slowMs: 25000, clampMin: 0.75, clampMax: 1.25 };
+      if (!p.penalties) {
+        p.penalties = {
           day3AgainMins: 15,
-          l1:   { hard: 0.40, good: 0.60, easy: 0.60 },
+          l1: { hard: 0.40, good: 0.60, easy: 0.60 },
           l2plus: { hard: 0.25, good: 0.50, easy: 0.50 },
           maxLevel: 10,
           compoundAfterL1: false,
         };
       }
-
-      if (!patched.tts) {
-        patched.tts = {
-          enVoice: "", thVoice: "",
-          rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false,
-          usePiper: false,
-          piperVoiceId: "en_US-hfc_female-medium",
-        };
+      if (!p.tts) {
+        p.tts = { enVoice: "", thVoice: "", rate: 0.92, pitch: 1.0, volume: 1.0, slowFirst: false, usePiper: false, piperVoiceId: "en_US-hfc_female-medium" };
       }
-      if (!("usePiper" in patched.tts)) patched.tts.usePiper = false;
-      if (!patched.tts.piperVoiceId) patched.tts.piperVoiceId = "en_US-hfc_female-medium";
-
+      if (!("usePiper" in p.tts)) p.tts.usePiper = false;
+      if (!p.tts.piperVoiceId) p.tts.piperVoiceId = "en_US-hfc_female-medium";
       // ensure deck has syn key
-      patched.deck = (patched.deck || []).map(d => ({ syn: "", ...d }));
+      p.deck = (p.deck || []).map(d => ({ syn: "", ...d }));
       // ensure cards object exists
-      if (!patched.cards) patched.cards = {};
-      return patched;
+      if (!p.cards) p.cards = {};
+      return p;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -239,8 +226,7 @@ export default function App() {
           )}
           {tab === "listen" && (
             <motion.div key="listen" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
-              {/* pass setStore so ListeningLab can persist its toggles (e.g., Piper) */}
-              <ListeningLab store={store} setStore={setStore} onXP={addXP} />
+              <ListeningLab store={store} onXP={addXP} />
             </motion.div>
           )}
           {tab === "settings" && (
@@ -257,7 +243,7 @@ export default function App() {
 }
 
 /* ===========================
-   TTS helper (prefer Google voices for GT-like sound)
+   TTS helper (async, pre-warm voices)
 =========================== */
 function pickBestVoice(voices, lang, preferredKey) {
   const list = voices.filter(v => (v.lang || "").toLowerCase().startsWith(lang.toLowerCase()));
@@ -267,7 +253,7 @@ function pickBestVoice(voices, lang, preferredKey) {
   const score = (v) => {
     const n = (v.name || "").toLowerCase();
     let s = 0;
-    if (n.startsWith("google")) s += 5;        // Chrome's Google voices
+    if (n.startsWith("google")) s += 5;
     if (n.includes("google")) s += 3;
     if (/en-us/i.test(v.lang)) s += 2;
     if (/en-gb|en-au|en-in/i.test(v.lang)) s += 1;
@@ -277,22 +263,53 @@ function pickBestVoice(voices, lang, preferredKey) {
   const best = (list.length ? list : voices).slice().sort((a,b)=>score(b)-score(a))[0];
   return best || null;
 }
-function ttsSpeak(text, lang, tts) {
+
+async function ensureVoicesReady() {
+  const synth = window.speechSynthesis;
+  if (!synth) return [];
+  let voices = synth.getVoices?.() || [];
+  if (voices.length) return voices;
+
+  // small delay then retry
+  await new Promise(r => setTimeout(r, 50));
+  voices = synth.getVoices?.() || [];
+  if (voices.length) return voices;
+
+  // wait for onvoiceschanged or 1s timeout
+  await new Promise(resolve => {
+    const timer = setTimeout(resolve, 1000);
+    const prev = synth.onvoiceschanged;
+    synth.onvoiceschanged = () => {
+      clearTimeout(timer);
+      if (prev) { try { prev(); } catch {} }
+      resolve();
+    };
+  });
+  return synth.getVoices?.() || [];
+}
+
+async function ttsSpeak(text, lang, tts) {
   try {
     const synth = window.speechSynthesis;
     if (!synth) return;
+
+    const voices = await ensureVoicesReady();
     const u = new SpeechSynthesisUtterance(String(text));
     u.lang = lang;
-    const voices = synth.getVoices?.() || [];
-    const preferredKey = lang.startsWith("th") ? tts?.thVoice : tts?.enVoice;
+
+    const preferredKey = lang?.toLowerCase().startsWith("th") ? tts?.thVoice : tts?.enVoice;
     const best = pickBestVoice(voices, lang, preferredKey);
     if (best) u.voice = best;
+
     u.rate = Number(tts?.rate ?? 0.92);
     u.pitch = Number(tts?.pitch ?? 1.0);
     u.volume = Number(tts?.volume ?? 1.0);
+
     synth.cancel(); // avoid stacking
     synth.speak(u);
-  } catch {}
+  } catch (e) {
+    console.warn("System TTS failed:", e);
+  }
 }
 
 /* ===========================

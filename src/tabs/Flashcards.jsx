@@ -27,6 +27,7 @@ function humanizeMs(ms) {
 }
 
 function safeProgress(p) {
+  // Always provide sane defaults so UI never crashes
   return {
     ef: 2.5,
     interval: 0,
@@ -95,7 +96,6 @@ function computeTimingFactor(latencyMs, timing) {
   return Math.max(clampMin, Math.min(clampMax, mul));
 }
 
-/* NEW: penalty multiplier uses settings.penalties */
 function penaltyMultiplier(level, grade, penalties) {
   if (level <= 0) return 1;
 
@@ -108,9 +108,10 @@ function penaltyMultiplier(level, grade, penalties) {
   const lvl = Math.min(level, maxLevel);
   if (lvl === 1) return Number(l1[g] ?? 1);
 
+  // level >= 2
   const base = Number(l2[g] ?? 1);
   if (!compound) return base;
-
+  // compound after L1: apply base^(level-1), clamped
   const out = Math.pow(base, lvl - 1);
   return Math.max(0.05, Math.min(1, out));
 }
@@ -187,7 +188,7 @@ function computeNext(progressIn, grade, settings, latencyHintMs) {
     }
   }
 
-  // Day 3+: Again = configurable minutes
+  // Day 3+: Again = fixed (configurable) minutes
   if (grade === "again") {
     const mins = Math.max(1, Number(penalties?.day3AgainMins ?? 15));
     return {
@@ -234,6 +235,25 @@ function Card({ children }) {
 
 /* ============================== Component ============================== */
 export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
+  // Tiny pre-warm for voices (helps Safari / first-time click)
+  useEffect(() => {
+    try {
+      const synth = window?.speechSynthesis;
+      if (!synth) return;
+      const v = synth.getVoices?.();
+      if (!v || !v.length) {
+        const prev = synth.onvoiceschanged;
+        synth.onvoiceschanged = () => {
+          if (prev) { try { prev(); } catch {} }
+          // read once then drop
+          synth.getVoices?.();
+          synth.onvoiceschanged = null;
+        };
+      }
+    } catch {}
+  }, []);
+
+  // Build due list safely
   const dueCards = useMemo(() => {
     const deck = Array.isArray(store?.deck) ? store.deck : [];
     const cards = store?.cards || {};
@@ -253,12 +273,14 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
   const viewStartRef = useRef(null);
   const measuredLatencyRef = useRef(null);
 
+  // reset timer when card changes
   useEffect(() => {
     setShow(false);
     measuredLatencyRef.current = null;
     viewStartRef.current = Date.now();
   }, [card?.id]);
 
+  // If nothing due
   if (!card) {
     return (
       <Card>
@@ -273,6 +295,7 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
     );
   }
 
+  // Actions
   function onShowTranslation() {
     if (measuredLatencyRef.current == null && viewStartRef.current != null) {
       measuredLatencyRef.current = Date.now() - viewStartRef.current;
@@ -292,12 +315,14 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
   }
 
   function applyGrade(grade) {
+    // stop timer if still running
     let latency = measuredLatencyRef.current;
     if (latency == null && viewStartRef.current != null) {
       latency = Date.now() - viewStartRef.current;
       measuredLatencyRef.current = latency;
     }
 
+    // compute next (uses latency only on Day-3+ H/G/E)
     const next = computeNext(
       prog,
       grade,
@@ -311,6 +336,7 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
       latency
     );
 
+    // updated progress
     let updated = {
       ...prog,
       ...next,
@@ -322,11 +348,10 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
     // Day-3+ penalty tracking
     const stage = baseStageFor(prog);
     const today = todayKey();
-    const maxLevel = Math.max(1, Number(store?.penalties?.maxLevel ?? 10));
     if (stage === "day3plus") {
       if (grade === "again") {
         const sameDay = prog.penaltyDateKey === today;
-        const level = sameDay ? Math.min(maxLevel, (prog.penaltyLevelToday || 0) + 1) : 1;
+        const level = sameDay ? Math.min(10, (prog.penaltyLevelToday || 0) + 1) : 1;
         updated.penaltyDateKey = today;
         updated.penaltyLevelToday = level;
       } else {
@@ -338,6 +363,7 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
       updated.penaltyLevelToday = 0;
     }
 
+    // attach latency stats
     if (Number.isFinite(latency)) {
       updated = updateLatencyStats(updated, latency);
     }
@@ -347,7 +373,7 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
     setShow(false);
   }
 
-  // Previews (include penalties in settings)
+  // Previews
   const settingsPack = {
     intervals: store?.intervals,
     day1: store?.day1,
@@ -360,6 +386,7 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
   const lblGood = previewLabel(prog, "good", settingsPack);
   const lblEasy = previewLabel(prog, "easy", settingsPack);
 
+  // "Due in" display
   const dueInText = (() => {
     const delta = Math.max(0, (prog?.dueAt ?? nowMs()) - nowMs());
     return humanizeMs(delta);
@@ -403,9 +430,7 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
         <div className="rounded-3xl border border-white/10 bg-white/5 p-6 min-h-[60dvh] sm:min-h-[320px] flex flex-col">
           <div className="flex items-center justify-between text-sm text-slate-300">
             <span>Card {positionLabel}</span>
-            <span>
-              Left in queue now: <b>{leftCount}</b>
-            </span>
+            <span>Left in queue now: <b>{leftCount}</b></span>
           </div>
 
           <div className="mt-2 text-4xl font-extrabold tracking-tight break-words">{card.en}</div>
@@ -467,7 +492,7 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
               </button>
             </div>
 
-            <div className="text-xs text-slate-4 00 pt-1">
+            <div className="text-xs text-slate-400 pt-1">
               Next due for this card: <b>{dueInText}</b>
             </div>
           </div>
