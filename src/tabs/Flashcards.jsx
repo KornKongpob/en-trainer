@@ -115,6 +115,11 @@ function penaltyMultiplier(level, grade, penalties) {
   return Math.max(0.05, Math.min(1, out));
 }
 
+/**
+ * Compute next due. Enforces:
+ * - Day1/Day2: Easy days > Good days by at least 1.
+ * - Day3+: Easy interval > Good interval by at least 1 day under same timing/penalty conditions.
+ */
 function computeNext(progressIn, grade, settings, latencyHintMs) {
   const progress = safeProgress(progressIn);
   const { intervals, day1, day2, timing, penalties } = settings || {};
@@ -152,7 +157,9 @@ function computeNext(progressIn, grade, settings, latencyHintMs) {
     }
     if (grade === "easy") {
       const s = sm2Step(progress, 5, intervals);
-      const d = Math.max(1, Number(day1?.easyDays ?? 2));
+      const goodRef = Math.max(1, Number(day1?.goodDays ?? 1));
+      let d = Math.max(1, Number(day1?.easyDays ?? 2));
+      if (d <= goodRef) d = goodRef + 1; // ensure Easy > Good by ≥1 day
       return { ...s, interval: d, reviews: progress.reviews, ...mkDue(d * MS.day) };
     }
   }
@@ -182,7 +189,9 @@ function computeNext(progressIn, grade, settings, latencyHintMs) {
     }
     if (grade === "easy") {
       const s = sm2Step(progress, 5, intervals);
-      const d = Math.max(1, Number(day2?.easyDays ?? 2));
+      const goodRef = Math.max(1, Number(day2?.goodDays ?? 1));
+      let d = Math.max(1, Number(day2?.easyDays ?? 2));
+      if (d <= goodRef) d = goodRef + 1; // ensure Easy > Good by ≥1 day
       return { ...s, interval: d, reviews: progress.reviews, ...mkDue(d * MS.day) };
     }
   }
@@ -212,6 +221,15 @@ function computeNext(progressIn, grade, settings, latencyHintMs) {
   const level = progress.penaltyDateKey === today ? progress.penaltyLevelToday || 0 : 0;
   const pMul = penaltyMultiplier(level, grade, penalties);
   days = Math.max(1, Math.round(days * pMul));
+
+  // Enforce Easy > Good by ≥1 day on Day-3+
+  if (grade === "easy") {
+    const baseGood = sm2Step(progress, 4, intervals || { easy: 3, good: 2, hard: 1 });
+    let goodDays = Math.max(1, Math.round(baseGood.interval * tf));
+    const pMulGood = penaltyMultiplier(level, "good", penalties);
+    goodDays = Math.max(1, Math.round(goodDays * pMulGood));
+    if (days <= goodDays) days = goodDays + 1;
+  }
 
   return { ef: base.ef, interval: days, reps: base.reps, reviews: progress.reviews, ...mkDue(days * MS.day) };
 }
@@ -243,7 +261,11 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
       if (!v || !v.length) {
         const prev = synth.onvoiceschanged;
         synth.onvoiceschanged = () => {
-          if (prev) { try { prev(); } catch {} }
+          if (prev) {
+            try {
+              prev();
+            } catch {}
+          }
           // read once then drop
           synth.getVoices?.();
           synth.onvoiceschanged = null;
@@ -418,7 +440,9 @@ export default function Flashcards({ store, setStore, onXP, ttsSpeak }) {
         <div className="rounded-3xl border border-white/10 bg-white/5 p-6 min-h-[60dvh] sm:min-h-[320px] flex flex-col">
           <div className="flex items-center justify-between text-sm text-slate-300">
             <span>Card {positionLabel}</span>
-            <span>Left in queue now: <b>{leftCount}</b></span>
+            <span>
+              Left in queue now: <b>{leftCount}</b>
+            </span>
           </div>
 
           <div className="mt-2 text-4xl font-extrabold tracking-tight break-words">{card.en}</div>
