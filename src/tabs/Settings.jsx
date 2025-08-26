@@ -22,13 +22,13 @@ export default function Settings({ store, setStore }) {
     <Card>
       <div className="text-lg font-bold mb-4">Settings</div>
       <div className="flex gap-2 mb-4 flex-wrap">
-        <button onClick={()=>setTab("general")} className={classNames("px-3 py-2 rounded", tab==="general"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>General</button>
-        <button onClick={()=>setTab("day1")} className={classNames("px-3 py-2 rounded", tab==="day1"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Day-1 & Day-2</button>
-        <button onClick={()=>setTab("timing")} className={classNames("px-3 py-2 rounded", tab==="timing"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Timing</button>
-        <button onClick={()=>setTab("penalties")} className={classNames("px-3 py-2 rounded", tab==="penalties"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Penalties</button>
-        <button onClick={()=>setTab("audio")} className={classNames("px-3 py-2 rounded", tab==="audio"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Audio / TTS</button>
-        <button onClick={()=>setTab("import")} className={classNames("px-3 py-2 rounded", tab==="import"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Import CSV</button>
-        <button onClick={()=>setTab("manage")} className={classNames("px-3 py-2 rounded", tab==="manage"?"bg-emerald-500/30":"bg-white/10 hover:bg-white/20")}>Manage Words</button>
+        <button onClick={() => setTab("general")} className={classNames("px-3 py-2 rounded", tab === "general" ? "bg-emerald-500/30" : "bg-white/10 hover:bg-white/20")}>General</button>
+        <button onClick={() => setTab("day1")} className={classNames("px-3 py-2 rounded", tab === "day1" ? "bg-emerald-500/30" : "bg-white/10 hover:bg-white/20")}>Day-1 & Day-2</button>
+        <button onClick={() => setTab("timing")} className={classNames("px-3 py-2 rounded", tab === "timing" ? "bg-emerald-500/30" : "bg-white/10 hover:bg-white/20")}>Timing</button>
+        <button onClick={() => setTab("penalties")} className={classNames("px-3 py-2 rounded", tab === "penalties" ? "bg-emerald-500/30" : "bg-white/10 hover:bg-white/20")}>Penalties</button>
+        <button onClick={() => setTab("audio")} className={classNames("px-3 py-2 rounded", tab === "audio" ? "bg-emerald-500/30" : "bg-white/10 hover:bg-white/20")}>Audio / TTS</button>
+        <button onClick={() => setTab("import")} className={classNames("px-3 py-2 rounded", tab === "import" ? "bg-emerald-500/30" : "bg-white/10 hover:bg-white/20")}>Import CSV</button>
+        <button onClick={() => setTab("manage")} className={classNames("px-3 py-2 rounded", tab === "manage" ? "bg-emerald-500/30" : "bg-white/10 hover:bg-white/20")}>Manage Words</button>
       </div>
 
       {tab === "general" && <GeneralSettings store={store} setStore={setStore} />}
@@ -51,7 +51,12 @@ function GeneralSettings({ store, setStore }) {
   const [dailyNew, setDailyNew] = useState(store.dailyNew ?? 10);
 
   function saveSettings() {
-    setStore((s) => ({ ...s, goal: Number(goal), intervals: { easy: Number(easyInt), good: Number(goodInt), hard: Number(hardInt) }, dailyNew: Number(dailyNew) }));
+    setStore((s) => ({
+      ...s,
+      goal: Number(goal),
+      intervals: { easy: Number(easyInt), good: Number(goodInt), hard: Number(hardInt) },
+      dailyNew: Number(dailyNew),
+    }));
   }
 
   return (
@@ -77,6 +82,7 @@ function GeneralSettings({ store, setStore }) {
           </label>
         </div>
         <div className="text-xs text-slate-300">Affects SM-2 after Day-2. EF adapts spacing over time.</div>
+        <div className="text-xs text-amber-300 mt-1">Note: Even if Easy and Good base days are equal, the app will schedule <b>Easy at least 1 day further</b> than Good on Day-3+.</div>
       </div>
 
       <div className="mb-4">
@@ -108,11 +114,51 @@ function Day12Settings({ store, setStore }) {
   const [d2Good, setD2Good] = useState(store.day2?.goodDays ?? 1);
   const [d2Easy, setD2Easy] = useState(store.day2?.easyDays ?? 2);
 
+  // Live guards: Easy must always be at least Good + 1
+  const onChangeD1Good = (val) => {
+    const v = Math.max(1, Number(val));
+    setD1Good(v);
+    if (Number(d1Easy) <= v) setD1Easy(v + 1);
+  };
+  const onChangeD1Easy = (val) => {
+    let v = Math.max(1, Number(val));
+    const min = Number(d1Good) + 1;
+    if (v <= min) v = min;
+    setD1Easy(v);
+  };
+  const onChangeD2Good = (val) => {
+    const v = Math.max(1, Number(val));
+    setD2Good(v);
+    if (Number(d2Easy) <= v) setD2Easy(v + 1);
+  };
+  const onChangeD2Easy = (val) => {
+    let v = Math.max(1, Number(val));
+    const min = Number(d2Good) + 1;
+    if (v <= min) v = min;
+    setD2Easy(v);
+  };
+
   function save() {
+    // Final guard on save (in case of any race conditions)
+    const safeD1Good = Math.max(1, Number(d1Good));
+    const safeD1Easy = Math.max(safeD1Good + 1, Number(d1Easy));
+    const safeD2Good = Math.max(1, Number(d2Good));
+    const safeD2Easy = Math.max(safeD2Good + 1, Number(d2Easy));
+
     setStore((s) => ({
       ...s,
-      day1: { againMins: Number(d1Again), hardMins: Number(d1Hard), goodDays: Number(d1Good), easyDays: Number(d1Easy) },
-      day2: { againMins: Number(d2Again), hardMins: Number(d2Hard), goodDays: Number(d2Good), easyDays: Number(d2Easy) },
+      day1: {
+        againMins: Math.max(1, Number(d1Again)),
+        hardMins: Math.max(1, Number(d1Hard)),
+        goodDays: safeD1Good,
+        easyDays: safeD1Easy,
+      },
+      day2: {
+        againMins: Math.max(1, Number(d2Again)),
+        hardMins: Math.max(1, Number(d2Hard)),
+        goodDays: safeD2Good,
+        easyDays: safeD2Easy,
+      },
     }));
   }
 
@@ -121,34 +167,36 @@ function Day12Settings({ store, setStore }) {
       <div className="text-sm mb-2">Day-1 timings</div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="flex items-center gap-2">Again (minutes)
-          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d1Again} onChange={(e)=>setD1Again(e.target.value)} />
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d1Again} onChange={(e) => setD1Again(Number(e.target.value))} />
         </label>
         <label className="flex items-center gap-2">Hard (minutes)
-          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d1Hard} onChange={(e)=>setD1Hard(e.target.value)} />
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d1Hard} onChange={(e) => setD1Hard(Number(e.target.value))} />
         </label>
         <label className="flex items-center gap-2">Good (days)
-          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d1Good} onChange={(e)=>setD1Good(e.target.value)} />
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d1Good} onChange={(e) => onChangeD1Good(e.target.value)} />
         </label>
         <label className="flex items-center gap-2">Easy (days)
-          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d1Easy} onChange={(e)=>setD1Easy(e.target.value)} />
+          <input type="number" min={2} className="w-24 rounded p-2 bg-white text-black" value={d1Easy} onChange={(e) => onChangeD1Easy(e.target.value)} />
         </label>
       </div>
+      <div className="text-xs text-amber-300 mt-1">Rule: On Day-1, <b>Easy</b> will be saved as at least <b>Good + 1</b> day.</div>
 
       <div className="text-sm mt-5 mb-2">Day-2 timings</div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="flex items-center gap-2">Again (minutes)
-          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d2Again} onChange={(e)=>setD2Again(e.target.value)} />
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d2Again} onChange={(e) => setD2Again(Number(e.target.value))} />
         </label>
         <label className="flex items-center gap-2">Hard (minutes)
-          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d2Hard} onChange={(e)=>setD2Hard(e.target.value)} />
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d2Hard} onChange={(e) => setD2Hard(Number(e.target.value))} />
         </label>
         <label className="flex items-center gap-2">Good (days)
-          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d2Good} onChange={(e)=>setD2Good(e.target.value)} />
+          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d2Good} onChange={(e) => onChangeD2Good(e.target.value)} />
         </label>
         <label className="flex items-center gap-2">Easy (days)
-          <input type="number" min={1} className="w-24 rounded p-2 bg-white text-black" value={d2Easy} onChange={(e)=>setD2Easy(e.target.value)} />
+          <input type="number" min={2} className="w-24 rounded p-2 bg-white text-black" value={d2Easy} onChange={(e) => onChangeD2Easy(e.target.value)} />
         </label>
       </div>
+      <div className="text-xs text-amber-300 mt-1">Rule: On Day-2, <b>Easy</b> will be saved as at least <b>Good + 1</b> day.</div>
 
       <div className="mt-3">
         <button onClick={save} className="rounded bg-emerald-500 px-4 py-2 hover:bg-emerald-600">Save Day-1/2 timings</button>
@@ -187,16 +235,16 @@ function TimingSettings({ store, setStore }) {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="flex items-center gap-2">fastMs
-          <input type="number" min={0} className="w-28 rounded p-2 bg-white text-black" value={fastMs} onChange={(e)=>setFastMs(e.target.value)} />
+          <input type="number" min={0} className="w-28 rounded p-2 bg-white text-black" value={fastMs} onChange={(e) => setFastMs(e.target.value)} />
         </label>
         <label className="flex items-center gap-2">slowMs
-          <input type="number" min={1} className="w-28 rounded p-2 bg-white text-black" value={slowMs} onChange={(e)=>setSlowMs(e.target.value)} />
+          <input type="number" min={1} className="w-28 rounded p-2 bg-white text-black" value={slowMs} onChange={(e) => setSlowMs(e.target.value)} />
         </label>
         <label className="flex items-center gap-2">clampMin
-          <input type="number" step="0.01" className="w-28 rounded p-2 bg-white text-black" value={clampMin} onChange={(e)=>setClampMin(e.target.value)} />
+          <input type="number" step="0.01" className="w-28 rounded p-2 bg-white text-black" value={clampMin} onChange={(e) => setClampMin(e.target.value)} />
         </label>
         <label className="flex items-center gap-2">clampMax
-          <input type="number" step="0.01" className="w-28 rounded p-2 bg-white text-black" value={clampMax} onChange={(e)=>setClampMax(e.target.value)} />
+          <input type="number" step="0.01" className="w-28 rounded p-2 bg-white text-black" value={clampMax} onChange={(e) => setClampMax(e.target.value)} />
         </label>
       </div>
 
@@ -255,7 +303,7 @@ function PenaltySettings({ store, setStore }) {
           <label className="flex items-center gap-2">
             Again delay (minutes):
             <input type="number" min={1} className="w-28 rounded p-2 bg-white text-black"
-                   value={day3AgainMins} onChange={(e)=>setDay3AgainMins(e.target.value)} />
+                   value={day3AgainMins} onChange={(e) => setDay3AgainMins(e.target.value)} />
           </label>
           <div className="text-xs text-slate-400 mt-1">After pressing Again on Day-3+, the card returns after this fixed delay.</div>
         </Card>
@@ -264,13 +312,13 @@ function PenaltySettings({ store, setStore }) {
           <div className="font-semibold mb-2">Level-1 multipliers (first Again today)</div>
           <div className="grid grid-cols-3 gap-2 items-end">
             <label className="text-sm">Hard
-              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l1Hard} onChange={(e)=>setL1Hard(e.target.value)} />
+              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l1Hard} onChange={(e) => setL1Hard(e.target.value)} />
             </label>
             <label className="text-sm">Good
-              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l1Good} onChange={(e)=>setL1Good(e.target.value)} />
+              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l1Good} onChange={(e) => setL1Good(e.target.value)} />
             </label>
             <label className="text-sm">Easy
-              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l1Easy} onChange={(e)=>setL1Easy(e.target.value)} />
+              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l1Easy} onChange={(e) => setL1Easy(e.target.value)} />
             </label>
           </div>
         </Card>
@@ -279,17 +327,17 @@ function PenaltySettings({ store, setStore }) {
           <div className="font-semibold mb-2">Level ≥2 multipliers (second+ Again today)</div>
           <div className="grid grid-cols-3 gap-2 items-end">
             <label className="text-sm">Hard
-              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l2Hard} onChange={(e)=>setL2Hard(e.target.value)} />
+              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l2Hard} onChange={(e) => setL2Hard(e.target.value)} />
             </label>
             <label className="text-sm">Good
-              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l2Good} onChange={(e)=>setL2Good(e.target.value)} />
+              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l2Good} onChange={(e) => setL2Good(e.target.value)} />
             </label>
             <label className="text-sm">Easy
-              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l2Easy} onChange={(e)=>setL2Easy(e.target.value)} />
+              <input type="number" step="0.01" min="0.05" max="1" className="w-full mt-1 rounded p-2 bg-white text-black" value={l2Easy} onChange={(e) => setL2Easy(e.target.value)} />
             </label>
           </div>
           <label className="flex items-center gap-2 mt-3">
-            <input type="checkbox" checked={compoundAfterL1} onChange={(e)=>setCompoundAfterL1(e.target.checked)} />
+            <input type="checkbox" checked={compoundAfterL1} onChange={(e) => setCompoundAfterL1(e.target.checked)} />
             Compound L2+ (apply ^level)
           </label>
           <div className="text-xs text-slate-400 mt-1">If checked, level≥2 applies multiplier^(level−1). Otherwise it uses the same L2+ multiplier for all further Agains.</div>
@@ -300,7 +348,7 @@ function PenaltySettings({ store, setStore }) {
           <label className="flex items-center gap-2">
             Max penalty level per day:
             <input type="number" min={1} className="w-28 rounded p-2 bg-white text-black"
-                   value={maxLevel} onChange={(e)=>setMaxLevel(e.target.value)} />
+                   value={maxLevel} onChange={(e) => setMaxLevel(e.target.value)} />
           </label>
           <div className="text-xs text-slate-400 mt-1">Caps how much penalties escalate in a single day.</div>
         </Card>
@@ -340,7 +388,7 @@ function AudioSettings({ store, setStore }) {
         <label className="text-sm">English voice
           <select className="mt-1 w-full rounded p-2 bg-white text-black"
                   value={tts.enVoice || ""}
-                  onChange={(e)=>setTTS({ enVoice: e.target.value })}>
+                  onChange={(e) => setTTS({ enVoice: e.target.value })}>
             {enVoices.length
               ? enVoices.map(v => <option key={`${v.name}__${v.lang}`} value={`${v.name}__${v.lang}`}>{v.name} — {v.lang}</option>)
               : <option>(voices loading… click any Play once)</option>}
@@ -349,7 +397,7 @@ function AudioSettings({ store, setStore }) {
         <label className="text-sm">Thai voice
           <select className="mt-1 w-full rounded p-2 bg-white text-black"
                   value={tts.thVoice || ""}
-                  onChange={(e)=>setTTS({ thVoice: e.target.value })}>
+                  onChange={(e) => setTTS({ thVoice: e.target.value })}>
             {thVoices.length
               ? thVoices.map(v => <option key={`${v.name}__${v.lang}`} value={`${v.name}__${v.lang}`}>{v.name} — {v.lang}</option>)
               : <option>(voices loading…)</option>}
@@ -361,20 +409,20 @@ function AudioSettings({ store, setStore }) {
         <label className="text-sm">Rate
           <input type="range" min="0.5" max="1.4" step="0.05" className="w-full"
                  value={Number(tts.rate ?? 0.92)}
-                 onChange={(e)=>setTTS({ rate: parseFloat(e.target.value) })} />
+                 onChange={(e) => setTTS({ rate: parseFloat(e.target.value) })} />
           <div className="text-xs text-slate-300">{Number(tts.rate ?? 0.92).toFixed(2)}x</div>
         </label>
         <label className="text-sm">Pitch
           <input type="range" min="0.8" max="1.2" step="0.02" className="w-full"
                  value={Number(tts.pitch ?? 1.0)}
-                 onChange={(e)=>setTTS({ pitch: parseFloat(e.target.value) })} />
+                 onChange={(e) => setTTS({ pitch: parseFloat(e.target.value) })} />
           <div className="text-xs text-slate-300">{Number(tts.pitch ?? 1.0).toFixed(2)}</div>
         </label>
         <label className="text-sm">Volume
           <input type="range" min="0.5" max="1" step="0.05" className="w-full"
                  value={Number(tts.volume ?? 1.0)}
-                 onChange={(e)=>setTTS({ volume: parseFloat(e.target.value) })} />
-          <div className="text-xs text-slate-300">{Math.round(Number(tts.volume ?? 1.0)*100)}%</div>
+                 onChange={(e) => setTTS({ volume: parseFloat(e.target.value) })} />
+          <div className="text-xs text-slate-300">{Math.round(Number(tts.volume ?? 1.0) * 100)}%</div>
         </label>
       </div>
 
@@ -600,14 +648,14 @@ function ManageWords({ store, setStore }) {
           className="flex-1 p-2 bg-white text-black rounded placeholder-slate-500"
           placeholder="Search words / meanings / synonyms"
           value={query}
-          onChange={(e)=>setQuery(e.target.value)}
+          onChange={(e) => setQuery(e.target.value)}
         />
         <label className="text-sm flex items-center gap-2">
-          <input type="checkbox" checked={!!allVisibleSelected} onChange={(e)=>toggleSelectAllVisible(e.target.checked)} />
+          <input type="checkbox" checked={!!allVisibleSelected} onChange={(e) => toggleSelectAllVisible(e.target.checked)} />
           Select all (visible)
         </label>
         {selected.size > 0 && (
-          <button onClick={()=>{ const ids = Array.from(selected); ids.forEach(deleteWord); setSelected(new Set()); }} className="px-3 py-2 bg-red-500 rounded hover:bg-red-600 text-sm">
+          <button onClick={() => { const ids = Array.from(selected); ids.forEach(deleteWord); setSelected(new Set()); }} className="px-3 py-2 bg-red-500 rounded hover:bg-red-600 text-sm">
             Delete selected ({selected.size})
           </button>
         )}
@@ -631,7 +679,7 @@ function ManageWords({ store, setStore }) {
         {editingId ? (
           <>
             <button onClick={updateWord} className="px-4 py-2 bg-blue-500 rounded hover:bg-blue-600">Update</button>
-            <button onClick={()=>{ setEditingId(null); setEn(""); setTh(""); setExample(""); setPos("noun"); setSyn(""); }} className="px-4 py-2 bg-gray-500 rounded hover:bg-gray-600">Cancel</button>
+            <button onClick={() => { setEditingId(null); setEn(""); setTh(""); setExample(""); setPos("noun"); setSyn(""); }} className="px-4 py-2 bg-gray-500 rounded hover:bg-gray-600">Cancel</button>
           </>
         ) : (
           <button onClick={addWord} className="px-4 py-2 bg-green-500 rounded hover:bg-green-600">Add</button>
@@ -645,7 +693,7 @@ function ManageWords({ store, setStore }) {
             return (
               <li key={item.id} className="flex justify-between items-center gap-3 bg-white/5 px-3 py-2 rounded-xl">
                 <label className="flex items-center gap-2 shrink-0">
-                  <input type="checkbox" checked={checked} onChange={(e)=>toggleSelect(item.id, e.target.checked)} />
+                  <input type="checkbox" checked={checked} onChange={(e) => toggleSelect(item.id, e.target.checked)} />
                 </label>
                 <span className="text-sm flex-1">
                   <b>{item.en}</b> — {item.th} <i className="text-slate-300">({item.pos})</i>
